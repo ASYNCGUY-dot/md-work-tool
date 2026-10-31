@@ -1,0 +1,22 @@
+// Read-only diagnostics: expose private helpers in VM memory, never change product files.
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.join(__dirname, '..');
+const c = vm.createContext({ console, localStorage: { getItem: () => null } });
+vm.runInContext('window=globalThis; MD={views:{}};', c);
+vm.runInContext(fs.readFileSync(path.join(root, 'js/util.js'), 'utf8'), c);
+let source = fs.readFileSync(path.join(root, 'js/views/datamgmt.js'), 'utf8');
+const end = source.lastIndexOf('})();');
+if (end < 0) throw new Error('Diagnostic hook no longer matches product source');
+source = source.slice(0, end) + 'MD.diagnostic={mapRows,applyImport,SPECS};\n' + source.slice(end);
+vm.runInContext(source, c);
+const d = c.MD.diagnostic;
+const impossible = d.mapRows(d.SPECS.sales, [{ date: '2026-02-31', channel: 'A', sku: 'S', sales: 100, qty: 0 }]);
+console.log(JSON.stringify({ diagnostic: 'invalid calendar date', accepted: impossible.rows, rejectedCount: impossible.bad }));
+c.MD.data = { isSample: false, sales: [], traffic: [], channels: [], products: [] };
+c.MD.store = { ensureReal() {}, save() {} };
+d.applyImport('sales', impossible.rows, 'merge');
+console.log(JSON.stringify({ diagnostic: 'explicit zero qty after import', rows: c.MD.data.sales }));
+const malformed = d.mapRows(d.SPECS.sales, [{ date: '2026-10-01', channel: 'A', sku: 'S', sales: 'oops' }]);
+console.log(JSON.stringify({ diagnostic: 'malformed amount', accepted: malformed.rows, rejectedCount: malformed.bad }));

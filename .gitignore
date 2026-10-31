@@ -1,0 +1,14 @@
+# 공개 저장소에는 앱 코드·테스트·더미 자료만 올린다
+# 협업 기록(Claude·Codex 검토 로그, 실행 기록)과 산출물은 로컬에만 둔다
+collaboration/
+outputs/
+.claude/
+# 협업 폴더의 스크립트를 검사하는 테스트 (협업 폴더 없이 실행되지 않음)
+tests/checkpoint.test.cjs
+tests/collaboration-runner.test.cjs
+
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

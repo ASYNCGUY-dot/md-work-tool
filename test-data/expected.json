@@ -1,0 +1,155 @@
+{
+ "lines": 32159,
+ "csv_rows": 32162,
+ "bad_rows": 3,
+ "agg_rows": 14537,
+ "merged_rows": 17622,
+ "traffic_rows": 1815,
+ "orphan_sku": "TMP-999",
+ "total_sales": 1564149550,
+ "last30": {
+  "sales": 146591370,
+  "ad": 24253200,
+  "visits": 108827,
+  "orders": 3094,
+  "roas": 6.0442073623274455,
+  "cvr": 0.028430444650684113,
+  "gross": 63160109.69999999,
+  "contribution": 41111746.063636355
+ },
+ "prev30": {
+  "sales": 141008260,
+  "ad": 23591400,
+  "visits": 100726,
+  "orders": 2990,
+  "roas": 5.977104368541078,
+  "cvr": 0.029684490598256657,
+  "gross": 60595230.927272715,
+  "contribution": 39148503.65454544
+ },
+ "oct_mtd_by_channel": {
+  "네이버 스마트스토어": 46339910,
+  "쿠팡": 58069450,
+  "지그재그": 18129490,
+  "자사몰": 10812610,
+  "카카오톡 선물하기": 9225460
+ },
+ "settlement": {
+  "hub_rows": 710,
+  "orders": 645,
+  "multi_line_orders": 65,
+  "platform_missing": [
+   "20261023-028536",
+   "20261023-028537"
+  ],
+  "platform_diff": "20261023-028543",
+  "account_missing": "20261023-028553",
+  "account_bad": "20261023-028563",
+  "account_extra": "20261029-EXTRA1"
+ },
+ "oct_ratio": {
+  "네이버 스마트스토어": {
+   "sales": 46339910,
+   "ad": 6970200,
+   "roas": 6.648289862557746,
+   "visits": 34391,
+   "orders": 888,
+   "cvr": 0.02582070890639993,
+   "roas_hold": false,
+   "cvr_hold": false
+  },
+  "쿠팡": {
+   "sales": 58069450,
+   "ad": 10898500,
+   "roas": 5.328205716382988,
+   "visits": 40277,
+   "orders": 1098,
+   "cvr": 0.027261216078655313,
+   "roas_hold": false,
+   "cvr_hold": false
+  },
+  "지그재그": {
+   "sales": 18129490,
+   "ad": 4480100,
+   "roas": 4.04667083324033,
+   "visits": 14328,
+   "orders": 347,
+   "cvr": 0.024218313791178114,
+   "roas_hold": false,
+   "cvr_hold": false
+  },
+  "자사몰": {
+   "sales": 10812610,
+   "ad": 1137100,
+   "roas": 9.508935010113447,
+   "visits": 8854,
+   "orders": 204,
+   "cvr": 0.023040433702281454,
+   "roas_hold": true,
+   "cvr_hold": false
+  },
+  "카카오톡 선물하기": {
+   "sales": 9225460,
+   "ad": 0,
+   "roas": null,
+   "visits": 8056,
+   "orders": 185,
+   "cvr": 0.022964250248262166,
+   "roas_hold": false,
+   "cvr_hold": true
+  }
+ },
+ "asof_confirmed": "2026-10-27",
+ "oct27": {
+  "네이버 스마트스토어": {
+   "spend": 6530700,
+   "revenue": 20207920,
+   "ad_roas": 3.0942961703952103,
+   "rev_missing_rows": 0,
+   "visits": 31916,
+   "orders": 828,
+   "cvr": 0.025943100639177843,
+   "sales": 43207560
+  },
+  "쿠팡": {
+   "spend": 10064070,
+   "revenue": 25081880,
+   "ad_roas": 2.4922203442543625,
+   "rev_missing_rows": 0,
+   "visits": 37899,
+   "orders": 1026,
+   "cvr": 0.027071954405129422,
+   "sales": 53852990
+  },
+  "지그재그": {
+   "spend": 4236100,
+   "revenue": 7621520,
+   "ad_roas": 1.7991832109723567,
+   "rev_missing_rows": 0,
+   "visits": 13535,
+   "orders": 324,
+   "cvr": 0.02393793867750277,
+   "sales": 17220630
+  },
+  "자사몰": {
+   "spend": 1077800,
+   "revenue": 4721610,
+   "ad_roas": 4.380784932269438,
+   "rev_missing_rows": 1,
+   "visits": 7963,
+   "orders": 184,
+   "cvr": 0.023106869270375488,
+   "sales": 9630910
+  },
+  "카카오톡 선물하기": {
+   "spend": 0,
+   "revenue": 0,
+   "ad_roas": null,
+   "rev_missing_rows": 0,
+   "visits": 7539,
+   "orders": 173,
+   "cvr": 0.022947340496087015,
+   "sales": 8772360
+  }
+ }
+}
