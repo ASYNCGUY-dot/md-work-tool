@@ -550,11 +550,12 @@
     }));
     const ca = el.querySelector('#closeAll');
     if (d.isSample) ca.disabled = true;
-    ca.onclick = () => {
+    ca.onclick = async () => {
       const n = closeRows.reduce((a, r) => a + srcs.filter(([k]) => r.last[k]).length, 0);
       if (!n || !confirm(`${n}칸을 각 자료의 마지막 날로 확인합니다. 실제로 그날까지 자료가 다 들어왔는지 확인하셨나요?`)) return;
       closeRows.forEach((r) => srcs.forEach(([k]) => { if (r.last[k]) MD.calc.setClose(r.ch, k, r.last[k]); }));
-      MD.store.save(['closes']); const y = window.scrollY; MD.rerender(); window.scrollTo(0, y); U.toast('자료 마감을 확인했습니다.');
+      const ok = await MD.store.save(['closes']); const y = window.scrollY; MD.rerender(); window.scrollTo(0, y);
+      if (ok) U.toast('자료 마감을 확인했습니다.'); // 실패 안내는 저장 함수가 띄운다
     };
 
     if (intr) el.querySelector('#intrOk').onclick = () => {

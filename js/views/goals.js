@@ -417,12 +417,13 @@
     const src = el.querySelector('#gSrc');
     src.innerHTML = months.map((m) => `<option value="${m}" ${m === (months.includes(cur) ? cur : months[0]) ? 'selected' : ''}>${label(m)}</option>`).join('');
 
-    const apply = (changes, what) => {
+    const apply = async (changes, what) => {
       if (!changes.length) { U.toast('바꿀 칸이 없습니다.'); return; }
       const sum = changes.reduce((a, x) => a + x.v, 0);
       if (!confirm(`${what}: ${changes.length}칸, 합계 ${U.won(sum)}을 입력합니다. 계속할까요?`)) return;
       changes.forEach((x) => C.setTarget(x.m, x.c, 'sales', x.v));
-      MD.store.save(['targets']); MD.rerender(); U.toast(`${changes.length}칸을 입력했습니다.`);
+      const ok = await MD.store.save(['targets']); MD.rerender();
+      if (ok) U.toast(`${changes.length}칸을 입력했습니다.`); // 실패 안내는 저장 함수가 띄운다
     };
     el.querySelector('#gFillLY').onclick = () => {
       const g = Number(el.querySelector('#gGrow').value) || 0, out = [], skip = [];

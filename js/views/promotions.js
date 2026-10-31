@@ -141,14 +141,16 @@
       slot.innerHTML = form(editing);
       slot.scrollIntoView({ behavior: 'smooth', block: 'start' });
       slot.querySelector('#pCancel').onclick = () => { slot.innerHTML = ''; };
-      slot.querySelector('#pSave').onclick = () => {
+      slot.querySelector('#pSave').onclick = async () => {
         const f = slot.querySelector('#pForm');
         const v = (n) => f.querySelector(`[name=${n}]`).value;
         if (!v('name') || !v('start') || !v('end')) { U.toast('행사명과 기간을 입력하세요.', 'bad'); return; }
         const rec = { id: editing.id || 'PR' + Date.now().toString(36), name: v('name'), channel: v('channel'), type: v('type'), start: v('start') <= v('end') ? v('start') : v('end'), end: v('start') <= v('end') ? v('end') : v('start'), discount: Number(v('discount')) / 100, budget: Number(v('budget')) || 0, categories: [...f.querySelectorAll('[name=cat]:checked')].map((x) => x.value), memo: v('memo') };
-        const i = d.promotions.findIndex((p) => p.id === rec.id);
+        const i = d.promotions.findIndex((p) => p.id === rec.id), prev = i >= 0 ? d.promotions[i] : null;
         i >= 0 ? (d.promotions[i] = rec) : d.promotions.push(rec);
-        MD.store.save(['promotions']); sel = rec.id; editing = null; MD.rerender(); U.toast('저장했습니다.');
+        // 저장 결과를 기다려 성공했을 때만 입력을 닫고 안내한다. 실패하면 화면 자료를 되돌리고 입력을 그대로 둬 다시 시도할 수 있게 (Codex 기능 L R3-01)
+        if (!(await MD.store.save(['promotions']))) { if (prev) d.promotions[i] = prev; else d.promotions.pop(); return; }
+        sel = rec.id; editing = null; MD.rerender(); U.toast('저장했습니다.');
       };
     }
 
