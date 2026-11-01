@@ -139,7 +139,9 @@
 
     const vendors = [
       { name: 'Maison Duval SARL', type: '해외 공급처', country: '프랑스', contact: 'export@duval.example', status: '거래중', terms: 'T/T 선결제 30%, FOB', last: U.addDays(end, -6), next: '가을 시즌 오더 확정', due: U.addDays(end, 4), contractEnd: U.addDays(end, 210), memo: '가방 MOQ 20' },
-      { name: 'Bottega Rossi Srl', type: '해외 공급처', country: '이탈리아', contact: 'sales@rossi.example', status: '거래중', terms: 'T/T 100%, EXW', last: U.addDays(end, -15), next: '단가 재협상 (환율 반영)', due: U.addDays(end, -2), contractEnd: U.addDays(end, 25), memo: '독점 판권 계약 갱신 필요' },
+      { name: 'Bottega Rossi Srl', type: '해외 공급처', country: '이탈리아', contact: 'sales@rossi.example', status: '거래중', terms: 'T/T 100%, EXW', last: U.addDays(end, -15), next: '단가 재협상 (환율 반영)', due: U.addDays(end, -2), contractEnd: U.addDays(end, 25), memo: '독점 판권 계약 갱신 필요',
+        contracts: [{ id: 'C-S1', kind: '판권·라이선스', title: 'ATELIER NOIR 국내 판권 (예시)', territory: '한국 온라인 독점', start: U.addDays(end, -340), end: U.addDays(end, 25), terms: '로열티 순매출의 8%, 분기 정산', royalty: 0.08, minimum: 50000000, renewal: '협의 갱신', noticeDays: 20, status: '유효', link: '' }],
+        history: [{ id: 'H-S1', date: U.addDays(end, -15), kind: '미팅', text: '판권 갱신 조건 1차 협의 — 로열티 인하 요청 (예시)' }] },
       { name: 'Alpen Trade AG', type: '해외 공급처', country: '스위스', contact: 'info@alpentrade.example', status: '협의중', terms: '협의 중', last: U.addDays(end, -3), next: '샘플 3종 수령 확인', due: U.addDays(end, 7), contractEnd: '', memo: '액세서리 라인' },
       { name: 'Van Dijk Fashion BV', type: '해외 공급처', country: '네덜란드', contact: 'buy@vandijk.example', status: '거래중', terms: 'T/T 50/50, CIF', last: U.addDays(end, -30), next: '연간 물량 계약 검토', due: U.addDays(end, 12), contractEnd: U.addDays(end, 58), memo: '' },
       { name: '(주)한빛리테일', type: 'B2B 거래처', country: '한국', contact: '구매팀 김OO', status: '거래중', terms: '월말 마감 익월 15일', last: U.addDays(end, -2), next: '11월 발주 수량 확인', due: U.addDays(end, 3), contractEnd: U.addDays(end, 120), memo: '연 거래액 상위' },
@@ -191,11 +193,11 @@
       { date: U.addDays(end, -40), end: U.addDays(end, -38), kind: '외부', title: '이른 한파로 아우터 검색량 급증 (예시)', channel: '', sample: true },
       { date: U.addDays(end, -15), end: U.addDays(end, -15), kind: '내부', title: '상세페이지 리뉴얼 반영 (예시)', channel: '네이버 스마트스토어', sample: true },
     ];
-    return { isSample: true, channels, products, sales, traffic, promotions, vendors, pos, candidates, targets, ads, closes, compete: [], events, reports: [], savedAt: null };
+    return { isSample: true, channels, products, sales, traffic, promotions, vendors, pos, candidates, targets, ads, closes, compete: [], events, reports: [], checklists: [], ranks: [], savedAt: null };
   }
 
   // ---------- 상태 ----------
-  const KEYS = ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'closes', 'compete', 'events', 'reports'];
+  const KEYS = ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'closes', 'compete', 'events', 'reports', 'checklists', 'ranks'];
 
   // 저장된 값을 꺼내는 함수(get)로 화면용 자료를 조립한다 — localStorage·IndexedDB 공통
   function build(get) {
@@ -204,7 +206,7 @@
     if (!meta || meta.isSample) {
       d = generateSample();
       // 예시 데이터라도 사용자가 편집한 소형 목록은 유지
-      if (meta) for (const k of ['vendors', 'pos', 'candidates', 'promotions', 'channels', 'targets', 'compete', 'events']) { const v = get(k, null); if (v) d[k] = v; }
+      if (meta) for (const k of ['vendors', 'pos', 'candidates', 'promotions', 'channels', 'targets', 'compete', 'events', 'checklists', 'ranks']) { const v = get(k, null); if (v) d[k] = v; }
     } else {
       d = { isSample: false };
       for (const k of KEYS) d[k] = get(k, k === 'closes' ? {} : []);
@@ -513,15 +515,18 @@
     return !failed;
   }
 
-  function resetToSample() {
-    for (const k of [...KEYS, 'meta']) U.store.del(k);
+  // keep: 예시로 되돌리면서 함께 저장할 자료 { 키: 값 } (예시 모드 백업의 체크리스트). 초기화와 같은 작업으로 저장해
+  // 하나라도 실패하면 초기화 전 자료가 그대로 남는다 (Codex 기능 M R2-02)
+  function resetToSample(keep = {}) {
+    const keepKeys = Object.keys(keep).filter((k) => KEYS.includes(k));
     if (useIDB()) {
+      for (const k of [...KEYS, 'meta']) U.store.del(k); // IndexedDB를 쓰는 동안 localStorage의 업무 키는 남은 사본일 뿐
       return new Promise((resolve) => {
         let conflict = false, finished = false, resetMeta = null;
         const finish = (ok) => {
           if (finished) return; finished = true;
           if (ok) {
-            build((k) => (k === 'meta' ? resetMeta : null)); // 예시 자료 — 세대는 초기화 전보다 하나 큼
+            build((k) => (k === 'meta' ? resetMeta : keepKeys.includes(k) ? keep[k] : null)); // 예시 자료 — 세대는 초기화 전보다 하나 큼
             MD.store.lastSave = { ok: true, at: new Date().toISOString() }; unsaved.clear();
             if (bc) bc.postMessage({ type: 'saved', gen: resetMeta.gen });
           } else {
@@ -539,18 +544,28 @@
           for (const k of KEYS) st.delete(k);
           // meta는 지우지 않고 세대를 올린다 — 세대가 0으로 돌아가면 초기화 전 자료를 연 다른 탭의 저장이 충돌 검사를 통과한다 (R3-02)
           resetMeta = { isSample: true, savedAt: new Date().toISOString(), gen: cur + 1 };
+          try { for (const k of keepKeys) st.put(keep[k], k); } catch (e) { tx.abort(); return; }
           st.put(resetMeta, 'meta');
         };
         tx.oncomplete = () => finish(true);
         tx.onabort = tx.onerror = () => finish(false);
       });
     }
+    const before = Object.fromEntries([...KEYS, 'meta'].map((k) => [k, rawGet(k)]));
+    for (const k of [...KEYS, 'meta']) U.store.del(k);
+    let ok = true;
+    if (keepKeys.length) ok = keepKeys.every((k) => U.store.set(k, keep[k])) && U.store.set('meta', { isSample: true, savedAt: new Date().toISOString() });
+    if (!ok) {
+      for (const [k, v] of Object.entries(before)) rawPut(k, v); // 되돌리기
+      U.toast('예시로 되돌리며 체크리스트를 저장하지 못해 아무것도 바꾸지 않았습니다(기존 자료 그대로).', 'bad');
+      return false;
+    }
     load();
     return true;
   }
 
   function startEmpty() {
-    MD.data = { isSample: false, channels: [], products: [], sales: [], traffic: [], promotions: [], vendors: [], pos: [], candidates: [], targets: [], ads: [], closes: {}, compete: [], events: [], reports: [] };
+    MD.data = { isSample: false, channels: [], products: [], sales: [], traffic: [], promotions: [], vendors: [], pos: [], candidates: [], targets: [], ads: [], closes: {}, compete: [], events: [], reports: [], checklists: [], ranks: [] };
     save();
   }
 
@@ -569,7 +584,7 @@
     if (!MD.data.isSample) return;
     const mine = (list) => (list || []).filter((x) => x.userSet);
     const keep = { vendors: [], pos: [], candidates: [], promotions: [] };
-    MD.data = { isSample: false, channels: mine(MD.data.channels), products: mine(MD.data.products), sales: [], traffic: [], ...keep, targets: realTargets(MD.data.targets), ads: [], closes: {}, compete: [], events: (MD.data.events || []).filter((e) => !e.sample), reports: [] };
+    MD.data = { isSample: false, channels: mine(MD.data.channels), products: mine(MD.data.products), sales: [], traffic: [], ...keep, targets: realTargets(MD.data.targets), ads: [], closes: {}, compete: [], events: (MD.data.events || []).filter((e) => !e.sample), reports: [], checklists: MD.data.checklists || [], ranks: MD.data.ranks || [] };
   }
 
   MD.buildIndex = function () {
@@ -579,6 +594,8 @@
     if (!Array.isArray(d.compete)) d.compete = [];
     if (!Array.isArray(d.events)) d.events = [];
     if (!Array.isArray(d.reports)) d.reports = [];
+    if (!Array.isArray(d.checklists)) d.checklists = [];
+    if (!Array.isArray(d.ranks)) d.ranks = [];
     d.compete.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     if (!d.closes || typeof d.closes !== 'object' || Array.isArray(d.closes)) d.closes = {};
     d.ads.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));

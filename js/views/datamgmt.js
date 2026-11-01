@@ -320,15 +320,29 @@
       return null;
     },
     pos: (r) => (!okText(r.sku) ? 'SKU' : !okNum(r.qty) ? '수량' : !okDateOrEmpty(r.ordered) ? '발주일' : !okDateOrEmpty(r.eta) ? '입고 예정일' : optNum(r, ['received']) || (fill(r, { received: 0 }), null)),
-    vendors: (r) => (!okText(r.name) ? '거래처명' : !okDateOrEmpty(r.last) ? '최근 접촉일' : !okDateOrEmpty(r.due) ? '다음 기한' : !okDateOrEmpty(r.contractEnd) ? '계약 종료일' : null),
+    vendors: (r) => (!okText(r.name) ? '거래처명' : !okDateOrEmpty(r.last) ? '최근 접촉일' : !okDateOrEmpty(r.due) ? '다음 기한' : !okDateOrEmpty(r.contractEnd) ? '계약 종료일'
+      // 계약·이력(로드맵 5순위): 목록·각 행 객체·날짜·숫자·문자열 형식
+      : r.contracts != null && (!Array.isArray(r.contracts) || r.contracts.some((c) => !isObj(c) || !okDateOrEmpty(c.start) || !okDateOrEmpty(c.end) || optNum(c, ['royalty', 'minimum', 'noticeDays']) || ['kind', 'title', 'territory', 'terms', 'renewal', 'status', 'link'].some((k) => c[k] != null && typeof c[k] !== 'string'))) ? '계약'
+      : r.history != null && (!Array.isArray(r.history) || r.history.some((h) => !isObj(h) || !okDate(h.date) || typeof h.text !== 'string' || (h.kind != null && typeof h.kind !== 'string'))) ? '이력' : null),
     candidates: (r) => (!okText(r.name) ? '후보명' : optNum(r, ['popularity', 'lastYearQty', 'outlook', 'margin', 'moq']) || null),
     events: (r) => (!okDate(r.date) ? '날짜' : !okDateOrEmpty(r.end) ? '종료일' : !okText(r.title) ? '내용' : (fill(r, { end: (x) => x.date }), null)),
+    checklists: (r) => (!okText(r.id) ? 'id' : !okText(r.title) ? '제목' : !okDateOrEmpty(r.base) ? '기준일' : r.promoId != null && typeof r.promoId !== 'string' ? '연결 행사' : !Array.isArray(r.items) ? '항목 목록' : r.skus != null && (!Array.isArray(r.skus) || r.skus.some((x) => typeof x !== 'string')) ? 'SKU 목록'
+      : r.items.some((i) => !isObj(i) || !okText(i.id) || !okText(i.text) || !okDateOrEmpty(i.due) || typeof i.done !== 'boolean' || (i.link != null && typeof i.link !== 'string') || (i.doneAt != null && i.doneAt !== '' && (typeof i.doneAt !== 'string' || isNaN(Date.parse(i.doneAt))))) ? '항목' : null),
+    // 검색 순위: 순위는 비었거나(범위 밖) 1 이상 정수, 관측 범위는 1 이상 정수, 순위 ≤ 범위
+    // 관측 시각은 모양(YYYY-MM-DDTHH:mm)만이 아니라 시 0~23·분 0~59·실제 달력 날짜까지 맞아야 한다 (25:00·10:99 거부)
+    ranks: (r) => {
+      const m = typeof r.at === 'string' && /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(r.at);
+      return (!okText(r.id)) ? 'id'
+        : (!m || !okDate(m[1]) || Number(m[2]) > 23 || Number(m[3]) > 59) ? '관측 시각' : !okText(r.platform) ? '플랫폼' : !okText(r.keyword) ? '키워드'
+        : !['자연', '광고'].includes(r.type) ? '구분' : !(Number.isInteger(r.scopeN) && r.scopeN >= 1) ? '관측 범위' : r.rank != null && !(Number.isInteger(r.rank) && r.rank >= 1 && r.rank <= r.scopeN) ? '순위'
+        : ['sku', 'device', 'memo', 'date'].some((k) => r[k] != null && typeof r[k] !== 'string') ? '글자 칸' : (fill(r, { date: (x) => x.at.slice(0, 10) }), null);
+    },
     reports: (r) => (!okText(r.id) ? 'id' : !okText(r.at) ? '저장 시각' : !okDate(r.start) || !okDate(r.end) ? '보고 기간' : typeof r.html !== 'string' ? '본문' : r.notes != null && (!Array.isArray(r.notes) || r.notes.some((n) => !isObj(n) || !okText(n.at) || isNaN(Date.parse(n.at)) || !okText(n.text))) ? '수정 문구' : null),
   };
   const BACKUP_NUMS = [...NUMS, 'received', 'popularity', 'lastYearQty', 'outlook', 'margin', 'moq', 'roas', 'cvr', 'adBudget', 'budget'];
   function checkBackup(j) {
     const out = [];
-    for (const k of ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'compete', 'events', 'reports']) {
+    for (const k of ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'compete', 'events', 'reports', 'checklists', 'ranks']) {
       const v = j[k];
       if (v === undefined && k !== 'sales') continue;
       if (!Array.isArray(v)) { out.push(`${k}: 목록 형식 아님`); continue; }
@@ -360,6 +374,8 @@
     if (nan.length) throw new Error(`요약 계산 값 오류(${nan.slice(0, 4).join(', ')})`);
     if (MD.promoResult) cand.promotions.forEach((p) => MD.promoResult(p));
   }
+  // 저장 장치가 쓰는 내부 키 — 백업 부가 설정으로 내보내거나 되살리지 않는다(저장 방식 표식 'backend'를 덮어쓰면 IndexedDB 연결이 끊김, Codex 기능 O R4-01)
+  const INTERNAL = new Set(['meta', 'pending', 'backend']);
   const headSig = (head) => head.join('|');
   const savedMap = (kind, head) => ((U.store.get('importMaps', {})[kind] || {})[headSig(head)] || {});
   function rememberMap(kind, head, override) {
@@ -480,7 +496,7 @@
 
     // 저장 사용량: 행 수·저장된 글자 수·마지막 저장 결과 (고정 한도 대비 %는 브라우저마다 달라 쓰지 않는다)
     const usage = MD.store.KEYS.map((k) => { let n = 0; try { n = (localStorage.getItem('mdwt:' + k) || '').length; } catch (e) { /* 접근 불가 */ } const v = d[k]; return { k, rows: Array.isArray(v) ? v.length : v && typeof v === 'object' ? Object.keys(v).length : 0, chars: n }; });
-    const LABEL = { channels: '채널', products: '상품', sales: '판매', traffic: '유입·광고비', promotions: '행사', vendors: '거래처', pos: '발주', candidates: '소싱 후보', targets: '목표', ads: '광고 리포트', closes: '마감 확인', compete: '경쟁 조사', events: '이슈 기록', reports: '보고서 확정본' };
+    const LABEL = { channels: '채널', products: '상품', sales: '판매', traffic: '유입·광고비', promotions: '행사', vendors: '거래처', pos: '발주', candidates: '소싱 후보', targets: '목표', ads: '광고 리포트', closes: '마감 확인', compete: '경쟁 조사', events: '이슈 기록', reports: '보고서 확정본', checklists: '체크리스트', ranks: '검색 순위' };
     const idb = MD.store.backend() === 'IndexedDB';
     if (idb) usage.forEach((u) => { try { u.chars = JSON.stringify(d[u.k] ?? '').length; } catch (e) { /* 계산 불가 */ } }); // IndexedDB는 글자 수를 직접 볼 수 없어 직렬화 길이로
     const dataChars = usage.reduce((a, u) => a + u.chars, 0), ls = MD.store.lastSave;
@@ -692,7 +708,7 @@
       out.isSample = d.isSample; out.exportedAt = new Date().toISOString(); out.backupVersion = 2;
       // 업무 자료 키·meta 말고 이 앱이 저장한 나머지 값(보고서 팀·작성자, 기간별 다음 액션, 분석 기준값, 가격 설정 등)
       out.extras = {};
-      try { for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (!key || !key.startsWith('mdwt:')) continue; const k = key.slice(5); if (k === 'meta' || k === 'pending' || MD.store.KEYS.includes(k)) continue; const v = U.store.get(k, null); if (v != null) out.extras[k] = v; } } catch (e) { /* 저장소 접근 불가 — 자료만 백업 */ }
+      try { for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (!key || !key.startsWith('mdwt:')) continue; const k = key.slice(5); if (INTERNAL.has(k) || MD.store.KEYS.includes(k)) continue; const v = U.store.get(k, null); if (v != null) out.extras[k] = v; } } catch (e) { /* 저장소 접근 불가 — 자료만 백업 */ }
       U.download(`MD워크툴_백업_${U.today()}.json`, JSON.stringify(out), 'application/json');
     };
     el.querySelector('#rs').onchange = async (e) => {
@@ -701,15 +717,25 @@
         const j = JSON.parse(await f.text());
         if (!Array.isArray(j.sales)) throw new Error('백업 파일 형식이 아닙니다.');
         if (j.isSample) {
-          if (!confirm('예시 데이터에서 받은 백업입니다. 내 데이터로 복원하지 않고 예시 데이터로 되돌립니다. 계속할까요?')) return;
-          if (await MD.store.resetToSample()) { MD.refresh(); U.toast('예시 데이터로 되돌렸습니다.'); }
+          // 판매 등 예시 자료는 다시 만들지만, 예시 모드에서 사용자가 직접 만든 자료(체크리스트·검색 순위)는 백업에서 되살린다
+          // (Codex 기능 M R1-01, 기능 O R3-01). 검사는 초기화 전에 — 실패하면 현재 자료를 건드리지 않는다
+          const OWN = { checklists: '체크리스트', ranks: '검색 순위 기록' };
+          const own = Object.fromEntries(Object.keys(OWN).map((k) => [k, j[k] === undefined ? [] : j[k]]));
+          const badS = checkBackup({ sales: [], ...own });
+          if (badS.length) throw new Error(`백업 파일의 자료 형식이 맞지 않습니다(기존 자료 그대로): ${badS.slice(0, 3).join(' / ')}`);
+          const keep = Object.fromEntries(Object.entries(own).filter(([, v]) => v.length));
+          const what = Object.entries(keep).map(([k, v]) => `${OWN[k]} ${v.length}건`).join(', ');
+          if (!confirm(`예시 데이터에서 받은 백업입니다. 판매 등은 예시 데이터로 되돌리고${what ? `, 백업의 ${what}은 되살립니다` : ''}. 계속할까요?`)) return;
+          // 초기화와 되살릴 자료 저장을 한 작업으로 — 실패하면 초기화 전 자료가 그대로 (Codex 기능 M R2-02)
+          if (!(await MD.store.resetToSample(keep))) return;
+          MD.refresh(); U.toast(`예시 데이터로 되돌렸습니다.${what ? ` ${what}을 되살렸습니다.` : ''}`);
           return;
         }
         // 형식 검사는 현재 자료를 바꾸기 전에 끝낸다 — 잘못된 백업이 기존 저장 자료를 덮어쓰지 않게 (Codex 기능 K R1-01)
         const bad = checkBackup(j);
         if (bad.length) throw new Error(`백업 파일의 자료 형식이 맞지 않습니다(기존 자료 그대로): ${bad.slice(0, 3).join(' / ')}${bad.length > 3 ? ` 외 ${bad.length - 3}건` : ''}`);
         const closes = Object.fromEntries(Object.entries(j.closes || {}).filter(([, c]) => c && !c.sample));
-        const cand = { isSample: false, channels: j.channels || [], products: j.products || [], sales: j.sales, traffic: j.traffic || [], promotions: j.promotions || [], vendors: j.vendors || [], pos: j.pos || [], candidates: j.candidates || [], targets: j.targets || [], ads: j.ads || [], closes, compete: j.compete || [], events: (j.events || []).filter((x) => !x.sample), reports: j.reports || [] };
+        const cand = { isSample: false, channels: j.channels || [], products: j.products || [], sales: j.sales, traffic: j.traffic || [], promotions: j.promotions || [], vendors: j.vendors || [], pos: j.pos || [], candidates: j.candidates || [], targets: j.targets || [], ads: j.ads || [], closes, compete: j.compete || [], events: (j.events || []).filter((x) => !x.sample), reports: j.reports || [], checklists: j.checklists || [], ranks: j.ranks || [] };
         // 저장 전에 화면 자료를 한 번 만들어 본다. 실패하면 이전 자료로 되돌리고 저장하지 않는다
         const prev = MD.data;
         try { trialBackup(cand); } catch (err2) { MD.data = prev; MD.buildIndex(); throw new Error(`백업 자료로 화면을 만들 수 없습니다(기존 자료 그대로): ${err2.message}`); }
@@ -719,7 +745,7 @@
         const ok = await MD.store.saveAllClearingInterrupted(); // 백업 전체 저장 = 이전 불완전 저장 해소 (IndexedDB면 비동기)
         // 보고서 작성자·기간별 액션·기준값 등(백업 버전 2부터 포함)은 자료 저장이 성공했을 때만 되살린다.
         // 업무 자료 키·meta·저장 진행 표시는 부가 설정으로 쓰지 않는다(잘못된 백업이 자료를 덮어쓰지 않게)
-        const reserved = new Set([...MD.store.KEYS, 'meta', 'pending']);
+        const reserved = new Set([...MD.store.KEYS, ...INTERNAL]);
         const extras = j.extras && typeof j.extras === 'object' && !Array.isArray(j.extras) ? Object.entries(j.extras) : [];
         const skippedX = extras.filter(([k]) => reserved.has(k)).map(([k]) => k);
         const failedX = ok ? extras.filter(([k]) => !reserved.has(k)).filter(([k, v]) => !U.store.set(k, v)).map(([k]) => k) : [];
@@ -730,7 +756,7 @@
           MD.store.lastSave = { ok: false, at: new Date().toISOString(), failed: '설정', notRestored: failedX };
           if (MD.saveStateChanged) MD.saveStateChanged();
           U.toast(`업무 자료는 복원·저장했지만 설정 ${failedX.length}개(${failedX.slice(0, 3).join(', ')})는 저장하지 못했습니다. 이 설정은 이전 값으로 남아 있습니다.`, 'bad');
-        } else U.toast(`복원·저장했습니다.${j.extras ? '' : ' (이전 형식 백업: 보고서 작성자·액션 문구·기준값은 들어 있지 않음)'}${skippedX.length ? ` 백업의 설정 칸에 있던 업무 자료 이름(${skippedX.join(', ')})은 무시했습니다.` : ''}`);
+        } else U.toast(`복원·저장했습니다.${j.extras ? '' : ' (이전 형식 백업: 보고서 작성자·액션 문구·기준값은 들어 있지 않음)'}${skippedX.length ? ` 백업의 설정 칸에 있던 업무 자료·내부 저장 항목 이름(${skippedX.join(', ')})은 무시했습니다.` : ''}`);
       } catch (err) { U.toast('복원 실패: ' + err.message, 'bad'); }
     };
     el.querySelector('#toSample').onclick = async () => { if (confirm('저장된 내 데이터를 지우고 예시 데이터로 되돌립니다. 먼저 백업하셨나요?')) { if (await MD.store.resetToSample()) MD.refresh(); } };

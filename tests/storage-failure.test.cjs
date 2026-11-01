@@ -56,28 +56,64 @@ test('storage write errors return false without erasing the previously stored va
   }
 });
 
-test('collection save failure warns about backup and retains both saved data and unsaved edits', () => {
+test('collection save failure warns about backup and retains both saved data and unsaved edits', async () => {
   for (const errorName of ['QuotaExceededError', 'SecurityError']) {
     const { md, saved, notices } = setup({ fail: ['mdwt:channels'], errorName });
     const original = saved.get('mdwt:channels');
-    assert.equal(md.store.save(['channels']), false, errorName);
+    assert.equal(await md.store.save(['channels']), false, errorName);
+    assert.equal(await md.store.saving, false);
     backupWarning(notices);
     assert.equal(saved.get('mdwt:channels'), original);
     assert.equal(md.data.channels[0].name, '수정 채널', 'unsaved edits remain available for backup');
-    md.store.load();
+    await md.store.load();
     assert.equal(md.data.channels[0].name, '기존 채널', 'reload recovers the last successful value');
   }
 });
 
-test('metadata save failure warns and preserves saved sales plus unsaved in-memory edits', () => {
-  // With storage full, changing isSample:true to false needs one more character.
-  // Replacing the old sales row with an equally sized real row still fits.
-  const { md, saved, notices } = setup({ quotaAtInitialSize: true, isSample: true });
-  const originalMeta = saved.get('mdwt:meta');
-  const originalSales = saved.get('mdwt:sales');
-  assert.equal(md.store.save(['sales']), false, 'failed mode metadata must not be reported as a successful save');
-  backupWarning(notices);
-  assert.equal(saved.get('mdwt:meta'), originalMeta);
-  assert.equal(saved.get('mdwt:sales'), originalSales, 'metadata failure must stop collection writes');
-  assert.equal(md.data.sales[0].sales, 200, 'the unsaved edit must remain available for backup');
+test('metadata save failure rolls collections back to their original strings and clears the pending marker', async () => {
+  for (const errorName of ['QuotaExceededError', 'SecurityError']) {
+    // No IndexedDB is provided: this targets the localStorage rollback path.
+    // Only meta fails, so pending creation and collection writes can succeed.
+    const { md, saved, notices } = setup({ fail: ['mdwt:meta'], errorName, isSample: true });
+    // Whitespace makes reparsing/reserializing different from exact raw rollback.
+    for (const [key, value] of saved) saved.set(key, JSON.stringify(JSON.parse(value), null, 2) + '\n');
+    const original = new Map(saved);
+    assert.equal(md.store.backend(), 'localStorage');
+    assert.equal(await md.store.save(['channels', 'sales']), false, errorName);
+    assert.equal(await md.store.saving, false);
+    assert.equal(md.store.lastSave.failed, 'meta', 'this regression must reach the metadata failure stage');
+    assert.equal(md.store.lastSave.ok, false);
+    assert.deepEqual(Array.from(md.store.lastSave.notRestored), [], 'every written collection must be restored');
+    backupWarning(notices);
+    for (const [key, value] of original) assert.equal(saved.get(key), value, key + ' must retain the exact original string');
+    assert.equal(saved.has('mdwt:pending'), false, 'complete rollback must remove this save\'s pending marker');
+    assert.equal(md.store.interrupted, null, 'complete rollback must not report mixed saved data');
+    assert.equal(md.data.sales[0].sales, 200, 'the unsaved sales edit must remain available for backup');
+    assert.equal(md.data.channels[0].name, '수정 채널', 'the unsaved channel edit must remain available for backup');
+  }
+});
+
+test('pending marker failure is distinct from metadata failure and leaves saved data untouched', async () => {
+  const cases = [
+    { fail: ['mdwt:pending'], errorName: 'QuotaExceededError' },
+    { fail: ['mdwt:pending'], errorName: 'SecurityError' },
+    // Preserve the original full-capacity fixture as its actual failure stage.
+    { quotaAtInitialSize: true, isSample: true },
+  ];
+  for (const options of cases) {
+    const { md, saved, notices } = setup(options);
+    const original = new Map(saved);
+    assert.equal(md.store.backend(), 'localStorage');
+    assert.equal(await md.store.save(['channels', 'sales']), false);
+    assert.equal(await md.store.saving, false);
+    assert.equal(md.store.lastSave.failed, 'pending');
+    assert.equal(md.store.lastSave.ok, false);
+    assert.deepEqual(Array.from(md.store.lastSave.notRestored), []);
+    backupWarning(notices);
+    for (const [key, value] of original) assert.equal(saved.get(key), value, key + ' must stay unchanged before any collection write');
+    assert.equal(saved.has('mdwt:pending'), false);
+    assert.equal(md.store.interrupted, null);
+    assert.equal(md.data.sales[0].sales, 200, 'pending failure must preserve the edit for backup');
+    assert.equal(md.data.channels[0].name, '수정 채널');
+  }
 });
