@@ -22,18 +22,27 @@
     const tDuring = C.inRange(d.traffic, p.start, pEnd).filter((t) => t.channel === p.channel);
     const tBase = C.inRange(d.traffic, bs, be).filter((t) => t.channel === p.channel);
     const a = C.summarize(during, tDuring), b = C.summarize(base, tBase);
-    const dailyA = a.sales / obs, dailyB = b.sales / BASE_DAYS;
+    // 직전 14일이 판매 자료 범위 밖이면 기준 매출을 0으로 보지 않고 판정을 보류한다.
+    // 일부만 범위 안이면 기준선은 지금처럼 14일 평균(없는 날 0)으로 두되 화면에 관측 일수를 알린다
+    // 자료 시작일은 행사 채널 기준 — 다른 채널에 오래된 판매가 있어도 이 채널 자료가 없던 기간은 기준으로 보지 않는다
+    const chFirst = (d.sales.find((r) => r.channel === p.channel) || {}).date || maxD;
+    const baseStart = chFirst > bs ? chFirst : bs;
+    const baseDays = baseStart <= be ? U.diffDays(baseStart, be) + 1 : 0;
+    const dailyA = a.sales / obs, dailyB = baseDays ? b.sales / BASE_DAYS : null;
     const cost = Number(p.budget) || 0;
-    const incSales = (dailyA - dailyB) * obs;
-    const incGross = a.gross - (b.gross / BASE_DAYS) * obs;
-    const netGain = incGross - cost / 1.1;
+    const incSales = baseDays ? (dailyA - dailyB) * obs : null;
+    const incGross = baseDays ? a.gross - (b.gross / BASE_DAYS) * obs : null;
+    const netGain = baseDays ? incGross - cost / 1.1 : null;
     // 행사·기준 기간 모두 판매가 없으면 판정하지 않는다. 순증 이익 0은 '본전 근처'
-    const status = p.end > (d.maxDate || '') ? '진행/예정' : !during.length && !base.length ? '자료 없음' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
+    const status = p.end > (d.maxDate || '') ? '진행/예정' : !during.length && !base.length ? '자료 없음' : !baseDays ? '기준 자료 없음' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
+    // 카테고리를 지정한 행사는 대상 카테고리 주문 ÷ 채널 유입(판매 파일 주문 기준), 아니면 공통 전환율
+    const cat = p.categories && p.categories.length;
     return {
       ...p, days, sales: a.sales, qty: a.qty, gross: a.gross, margin: a.margin, discountAmt: a.discount,
       dailyA, dailyB, lift: dailyB ? dailyA / dailyB - 1 : null, incSales, incGross, netGain, cost,
-      roas: cost ? a.sales / cost : null, iroas: cost ? incSales / cost : null,
-      cvr: a.cvr, prevCvr: b.cvr, baseMargin: b.margin, status, baseFrom: bs,
+      roas: cost ? a.sales / cost : null, iroas: cost && incSales != null ? incSales / cost : null,
+      cvr: cat ? a.cvrSales : a.cvr, prevCvr: cat ? b.cvrSales : b.cvr, cvrNote: cat ? '대상 카테고리 주문(판매 파일) ÷ 채널 전체 유입' : C.cvrNote(a),
+      baseMargin: baseDays ? b.margin : null, baseDays, status, baseFrom: bs,
     };
   };
 
@@ -65,14 +74,15 @@
     if (!sel || !list.find((x) => x.id === sel)) sel = (list.find((x) => x.status !== '진행/예정') || list[0] || {}).id;
     const cur = list.find((x) => x.id === sel);
     const done = list.filter((x) => x.status !== '진행/예정');
-    const win = done.filter((x) => x.status === '성공').length;
+    const judged = done.filter((x) => x.netGain != null); // 기준 자료가 없는 행사는 성공률·순증 합계에서 뺀다
+    const win = judged.filter((x) => x.status === '성공').length;
 
     el.innerHTML = `
       <div class="grid g4">
-        <div class="kpi"><div class="k">분석한 행사</div><div class="v">${done.length}건</div><div class="s">종료된 행사 기준</div></div>
-        <div class="kpi"><div class="k">순증 이익 플러스</div><div class="v">${win}건</div><div class="s">${done.length ? U.pct(win / done.length, 0) : '-'} 성공률</div></div>
-        <div class="kpi"><div class="k">행사 매출 합계</div><div class="v">${U.krw(done.reduce((a, x) => a + x.sales, 0))}</div><div class="s">증분 매출 ${U.krw(done.reduce((a, x) => a + x.incSales, 0))}</div></div>
-        <div class="kpi"><div class="k">행사 비용 합계</div><div class="v">${U.krw(done.reduce((a, x) => a + x.cost, 0))}</div><div class="s">순증 이익 ${U.krw(done.reduce((a, x) => a + x.netGain, 0))}</div></div>
+        <div class="kpi"><div class="k">분석한 행사</div><div class="v">${done.length}건</div><div class="s">종료된 행사 기준${judged.length < done.length ? ` · 판정 가능 ${judged.length}건` : ''}</div></div>
+        <div class="kpi"><div class="k">순증 이익 플러스</div><div class="v">${win}건</div><div class="s">${judged.length ? U.pct(win / judged.length, 0) : '-'} 성공률</div></div>
+        <div class="kpi"><div class="k">행사 매출 합계</div><div class="v">${U.krw(done.reduce((a, x) => a + x.sales, 0))}</div><div class="s">증분 매출 ${U.krw(judged.reduce((a, x) => a + x.incSales, 0))}</div></div>
+        <div class="kpi"><div class="k">행사 비용 합계</div><div class="v">${U.krw(done.reduce((a, x) => a + x.cost, 0))}</div><div class="s">순증 이익 ${U.krw(judged.reduce((a, x) => a + x.netGain, 0))}</div></div>
       </div>
       <div id="formSlot"></div>
       <div class="card" style="margin-top:16px">
@@ -93,7 +103,7 @@
             <div><div class="k">순증 이익</div><div class="v">${U.krw(cur.netGain)}</div></div>
             <div><div class="k">전환율</div><div class="v">${U.pct(cur.cvr, 2)}</div></div>
           </div>
-          <div class="note">평시 이익률 ${U.pct(cur.baseMargin)} · 평시 전환율 ${U.pct(cur.prevCvr, 2)} (전환율 = 대상 카테고리 주문 ÷ 채널 전체 유입)${cur.status === '진행/예정' ? ' · 진행 중이면 판매 자료 마지막 날까지만 계산' : ''}</div>
+          <div class="note">평시 이익률 ${U.pct(cur.baseMargin)} · 평시 전환율 ${U.pct(cur.prevCvr, 2)}${cur.cvrNote ? ` (전환율 = ${cur.cvrNote})` : ''}${cur.status === '진행/예정' ? ' · 진행 중이면 판매 자료 마지막 날까지만 계산' : ''}${cur.status === '기준 자료 없음' ? ` · 행사 직전 ${BASE_DAYS}일(${cur.baseFrom}~) 판매 자료가 없어 순증·성공 여부를 판정하지 않음` : cur.baseDays != null && cur.baseDays < BASE_DAYS && cur.status !== '진행/예정' ? ` · 직전 ${BASE_DAYS}일 중 판매 자료가 있는 날은 ${cur.baseDays}일뿐이라 기준선이 낮게 잡혔을 수 있음` : ''}</div>
         </div></div>` : ''}
       <div class="card" id="sim">
         <div class="card-head"><h2>행사 손익분기 시뮬레이터</h2><span class="muted">행사 전에 “얼마나 더 팔아야 본전인가”를 계산</span></div>

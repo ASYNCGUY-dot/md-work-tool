@@ -32,7 +32,7 @@
         ${[
           ['유입', U.num(s.visits), U.deltaHtml(U.delta(s.visits, p.visits))],
           ['주문', U.num(s.orders), U.deltaHtml(U.delta(s.orders, p.orders))],
-          ['전환율 (주문÷유입)', U.pct(s.cvr, 2), `${MD.cmpLabel()} ${U.pct(p.cvr, 2)}`],
+          ['전환율', U.pct(s.cvr, 2), `${C.cvrNote(s) ? `${C.cvrNote(s)} · ` : ''}${MD.cmpLabel()} ${U.pct(p.cvr, 2)}`],
           ['광고 ROAS (광고 매출÷광고비)', s.roas == null ? '-' : U.pct(s.roas, 0), s.adRows ? `광고비(리포트) ${U.krw(s.adSpend)}` : '광고 리포트 없음'],
         ].map(([k, v, sub]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('')}
       </div>

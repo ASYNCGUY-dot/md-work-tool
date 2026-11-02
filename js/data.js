@@ -750,7 +750,14 @@
       z.fee += (r.sales * (ch ? ch.fee : 0)) / 1.1;
       z.cogs += r.qty * (p ? p.cost : 0);
     }
-    for (const t of traffic || []) { z.ad += t.ad || 0; z.visits += t.visits || 0; }
+    // 전환율은 유입 파일의 플랫폼 주문 건수 ÷ 방문수(기능 E 결정). 판매 파일 주문수는 상품 행마다 중복될 수 있어 참고값
+    // 요약 값은 모두 숫자로 둔다(백업 시험 계산이 문자열을 오류로 본다) — 기준 설명은 cvrNote(z)로 만든다
+    z.pOrders = 0; z.pVisits = 0; z.tRows = 0; z.tOrdRows = 0;
+    for (const t of traffic || []) {
+      z.ad += t.ad || 0; z.visits += t.visits || 0; z.tRows++;
+      // 방문 빈칸(vOk=false) 행은 주문이 있어도 분자·분모 모두에서 뺀다 (Codex 분리 1단계 R2-01)
+      if (t.ordOk && t.vOk !== false && t.orders != null) { z.pOrders += t.orders; z.pVisits += t.visits || 0; z.tOrdRows++; }
+    }
     z.adSpend = 0; z.adRev = 0; z.adRevSpend = 0; z.adRows = 0; z.adRevMiss = 0;
     for (const a of ads || []) {
       z.adRows++; z.adSpend += a.spend || 0;
@@ -764,9 +771,17 @@
     z.margin = z.net ? z.gross / z.net : null;
     z.roas = z.adRevSpend ? z.adRev / z.adRevSpend : null;
     z.salesPerAd = z.ad ? z.sales / z.ad : null; // 예전 정의(전체 매출 ÷ 유입 파일 광고비) — 참고용
-    z.cvr = z.visits ? z.orders / z.visits : null;
+    z.cvrSales = z.visits ? z.orders / z.visits : null;
+    z.cvr = z.tOrdRows ? (z.pVisits ? z.pOrders / z.pVisits : null) : z.cvrSales; // 플랫폼 주문 수가 없으면 판매 주문수 기준 참고값
     z.aov = z.orders ? z.sales / z.orders : null;
     return z;
+  }
+
+  // 전환율 기준 설명 (summarize 결과로 판단)
+  function cvrNote(z) {
+    if (!z) return '';
+    if (z.tOrdRows) return z.tOrdRows === z.tRows ? '플랫폼 주문 ÷ 방문' : '플랫폼 주문 ÷ 방문(주문·방문 수가 모두 있는 유입 행만)';
+    return z.visits ? '참고값: 판매 파일 주문 ÷ 방문(유입 파일에 플랫폼 주문 수 없음)' : '';
   }
 
   function period(s, e, filter) {
@@ -929,5 +944,5 @@
   // 저장 결과를 항상 Promise<boolean>으로 — 화면 편집은 '저장 → 실패면 되돌림 → 성공 안내는 성공 때만'을 이 결과로 판단한다 (개선 3단계)
   const saveP = (keys) => { try { const r = save(keys); return r && typeof r.then === 'function' ? r.then((ok) => ok !== false, () => false) : Promise.resolve(r !== false); } catch (e) { return Promise.resolve(false); } };
   MD.store = { load, save, saveP, resetToSample, startEmpty, ensureReal, sampleCarry, SAMPLE_KEEP, DATASETS, dsOf, emptyOf, generateSample, acceptInterrupted, saveAllClearingInterrupted, recoverLegacy, discardLegacy, legacy: null, lastSave: null, interrupted: null, saving: Promise.resolve(true), gen: 0, KEYS, unsavedKeys: () => [...unsaved], backend: () => (useIDB() ? 'IndexedDB' : 'localStorage') };
-  MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, channelRefs, renameChannel };
+  MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, cvrNote, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, channelRefs, renameChannel };
 })();

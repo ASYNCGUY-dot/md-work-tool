@@ -137,7 +137,7 @@
       MD.competeSignals(st.start, st.end, cs, ce).bySku.filter((r) => r.gap != null && r.gap > 0.1 + 1e-9 && r.dSales != null && r.dSales < 0).slice(0, 2).forEach((r) => out.push({ title: `${r.name} 가격 대응`, why: `경쟁 최저가보다 ${U.pct(r.gap)} 비싸고 매출 ${U.pct(r.dSales)}`, est: r.prevSales - r.sales, how: `줄어든 매출 ${U.krw(r.prevSales - r.sales)}원 회복이 목표. 가격 인하보다 쿠폰·묶음 구성·사은품으로 실판매가를 맞추는 안부터 손익분기 시뮬레이터로 검토` }));
     }
     // 5. 행사: 지금까지 성공률 높은 행사 유형
-    const done = d.promotions.map(MD.promoResult).filter((r) => r.status !== '진행/예정' && r.status !== '자료 없음');
+    const done = d.promotions.map(MD.promoResult).filter((r) => r.status !== '진행/예정' && r.status !== '자료 없음' && r.status !== '기준 자료 없음');
     if (done.length >= 2) {
       const byType = [...U.groupBy(done, (r) => r.type).entries()].map(([t, rs]) => ({ t, n: rs.length, win: rs.filter((r) => r.status === '성공').length, gain: rs.reduce((a, r) => a + (r.netGain || 0), 0) / rs.length })).sort((a, b) => b.gain - a.gain);
       const top = byType[0];

@@ -3,17 +3,39 @@
   const U = MD.util;
   MD.views = MD.views || {};
 
-  const NAV = [
-    ['시작하기', [['guide', '오늘 할 일·월초 체크']]],
-    ['성과 분석', [['dashboard', '매출 대시보드'], ['goals', '목표·KPI 달성'], ['insight', '매출 변동 분석·개선 제안'], ['channels', '채널·유입·전환'], ['ads', '광고 성과'], ['compete', '경쟁 상품 비교'], ['ranks', '검색 순위'], ['products', '상품 성과·재고'], ['promotions', '프로모션·타임딜']]],
-    ['기획·가격', [['pricing', '원가·마진·판매가'], ['sourcing', '상품 선정·소싱']]],
-    ['운영 관리', [['settlement', '매출 정산 대사'], ['vendors', '거래처·계약'], ['orders', '발주·입고 일정'], ['checklist', '오픈·기획전 체크리스트']]],
-    ['보고', [['report', '보고서 자동 작성']]],
-    ['설정', [['data', '데이터 관리']]],
-  ];
+  // 화면 이름은 공간과 무관하게 하나 (공용 화면은 같은 이름 유지)
+  const LABELS = {
+    guide: '오늘 할 일·월초 체크', dashboard: '매출 대시보드', goals: '목표·KPI 달성', insight: '매출 변동 분석·개선 제안', channels: '채널·유입·전환',
+    ads: '광고 성과', compete: '경쟁 상품 비교', ranks: '검색 순위', products: '상품 성과·재고', promotions: '프로모션·타임딜',
+    pricing: '원가·마진·판매가', sourcing: '상품 선정·소싱', settlement: '매출 정산 대사', vendors: '거래처·계약', orders: '발주·입고 일정',
+    checklist: '오픈·기획전 체크리스트', report: '보고서 자동 작성', data: '데이터 관리',
+  };
+  // 작업 공간(분리 1단계): 권한·자료 분리가 아니라 메뉴 구성 선택. URL(#화면)·기간·계산·확정본은 공간과 무관하게 같다.
+  // 표시: shared = 양쪽 공용 화면, unified = 아직 MD·광고가 한 화면에 섞인 통합 화면, 바로가기 묶음 = 다른 공간 화면으로 이동(공간은 그대로)
+  const SPACES = {
+    md: { name: 'MD 업무', start: 'dashboard', nav: [
+      ['시작하기', [['guide'], ['dashboard']]],
+      ['실적 확인', [['goals', 'unified'], ['insight'], ['channels', 'shared'], ['products'], ['compete'], ['promotions', 'shared']]],
+      ['상품·가격 기획', [['pricing'], ['sourcing']]],
+      ['운영·마감', [['settlement'], ['vendors'], ['orders'], ['checklist']]],
+      ['보고', [['report', 'unified']]],
+      ['설정', [['data', 'shared']]],
+      ['마케팅·광고 바로가기', [['ads'], ['ranks']], 'mkt'],
+    ] },
+    mkt: { name: '마케팅·광고', start: 'ads', nav: [
+      ['시작하기', [['ads'], ['guide', 'unified']]],
+      ['유입·순위', [['channels', 'shared'], ['ranks']]],
+      ['행사·목표', [['promotions', 'shared'], ['goals', 'unified']]],
+      ['보고', [['report', 'unified']]],
+      ['설정', [['data', 'shared']]],
+      ['MD 업무 바로가기', [['compete'], ['insight'], ['checklist']], 'md'],
+    ] },
+  };
+  const MARKS = { shared: ['공용', 'MD 업무·마케팅 양쪽에서 같은 화면·같은 값'], unified: ['통합', 'MD·광고 지표가 아직 한 화면에 함께 있습니다'] };
+  const space = () => (SPACES[MD.state.space] ? MD.state.space : 'md');
   const USES_PERIOD = ['dashboard', 'insight', 'channels', 'products', 'ads', 'compete', 'report'];
 
-  MD.state = { view: 'dashboard', start: null, end: null, cmp: U.store.get('cmp', 'prev'), preset: U.store.get('preset', '28') };
+  MD.state = { view: 'dashboard', start: null, end: null, cmp: U.store.get('cmp', 'prev'), preset: U.store.get('preset', '28'), space: U.store.get('space', 'md') };
 
   function setPreset(p) {
     const d = MD.data, end = d.maxDate || U.today();
@@ -31,10 +53,31 @@
   }
 
   function renderNav() {
-    const nav = document.getElementById('nav');
-    nav.innerHTML = NAV.map(([g, items]) =>
-      `<div class="nav-group">${g}</div>` + items.map(([id, label]) => `<a href="#${id}" data-id="${id}">${label}</a>`).join('')
+    const nav = document.getElementById('nav'), sp = space();
+    const sw = `<div class="space-sw" role="group" aria-label="작업 공간">${Object.entries(SPACES).map(([k, v]) =>
+      `<button type="button" data-space="${k}" class="${k === sp ? 'on' : ''}" aria-pressed="${k === sp}">${v.name}</button>`).join('')}</div><div id="protAlert"></div>`;
+    nav.innerHTML = sw + SPACES[sp].nav.map(([g, items, other]) =>
+      `<div class="nav-group${other ? ' other' : ''}">${g}</div>` + items.map(([id, mark]) =>
+        `<a href="#${id}" data-id="${id}"${other ? ` title="${SPACES[other].name} 공간의 화면입니다 — 이 공간 메뉴는 그대로 둡니다"` : ''}>${LABELS[id]}${mark ? `<span class="ntag ${mark}" title="${MARKS[mark][1]}">${MARKS[mark][0]}</span>` : ''}${other ? '<span class="ntag go" aria-hidden="true">↗</span>' : ''}</a>`).join('')
     ).join('');
+    nav.querySelectorAll('[data-space]').forEach((b) => (b.onclick = () => setSpace(b.dataset.space)));
+  }
+  // 공간을 바꾸면 메뉴를 바꾸고 그 공간의 시작 화면으로. 기간·비교 기준·자료는 그대로
+  function setSpace(k) {
+    if (!SPACES[k]) return;
+    MD.state.space = k; U.store.set('space', k);
+    renderNav();
+    const to = SPACES[k].start;
+    if (location.hash === '#' + to) render(); else location.hash = '#' + to;
+  }
+  // 자료 보호 알림(저장 실패·백업 등)은 어느 공간에서든 사이드바에 보인다
+  function renderProt() {
+    const box = document.getElementById('protAlert');
+    if (!box) return;
+    let items = [];
+    try { const g = MD.todayItems && MD.todayItems().groups.find((x) => x.key === 'protect'); items = g ? g.items : []; } catch (e) { items = []; }
+    const bad = items.some((i) => i.level === 'bad');
+    box.innerHTML = items.length ? `<a class="prot ${bad ? 'bad' : 'warn'}" href="#data" title="${U.esc(items.map((i) => i.what).join(' / '))}">자료 보호 확인 ${items.length}건<small>${U.esc(items[0].what)}</small></a>` : '';
   }
 
   // 자료 신선도: 판매·유입 자료의 마지막 날. 오늘보다 4일 이상 늦으면 경고
@@ -72,12 +115,13 @@
 
   function renderTopbar() {
     const s = MD.state, d = MD.data;
-    const label = NAV.flatMap((g) => g[1]).find((x) => x[0] === s.view);
+    const label = LABELS[s.view];
     const bar = document.getElementById('topbar');
     const per = USES_PERIOD.includes(s.view);
     bar.innerHTML = `
       <button class="btn menu-btn" id="menuBtn" aria-label="메뉴">☰</button>
-      <div class="title">${label ? label[1] : ''}</div>
+      <span class="space-name" title="작업 공간 — 메뉴(☰)에서 바꿉니다">${SPACES[space()].name}</span>
+      <div class="title">${label || ''}</div>
       ${per ? `
       <div class="seg" id="presets">
         ${[['wtd', '이번 주'], ['lw', '지난 주'], ['mtd', '이번 달'], ['lm', '지난 달'], ['7', '7일'], ['28', '28일'], ['90', '90일']].map(([k, l]) => `<button data-p="${k}" class="${s.preset === k ? 'on' : ''}">${l}</button>`).join('')}
@@ -109,6 +153,7 @@
   function render() {
     const id = MD.state.view;
     document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.id === id));
+    renderProt();
     document.querySelector('.side').classList.remove('open');
     renderTopbar();
     MD.charts.destroyAll();
@@ -124,7 +169,7 @@
   }
 
   function route() {
-    const id = location.hash.replace('#', '') || 'dashboard';
+    const id = location.hash.replace('#', '') || SPACES[space()].start;
     MD.state.view = id;
     render();
     window.scrollTo(0, 0);

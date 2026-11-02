@@ -99,7 +99,7 @@
       { k: '매출총이익', exact: s.gross, v: U.krw(s.gross) + '원', sub: `${U.deltaHtml(U.delta(s.gross, p.gross))} 이익률 ${U.pct(s.margin)}` },
       { k: '이익률', v: U.pct(s.margin), sub: `${lab} ${U.pct(p.margin)} <b>${pp(s.margin, p.margin)}</b>` },
       { k: '광고 ROAS', v: s.roas == null ? '-' : U.pct(s.roas, 0), sub: s.adRows ? `광고 매출 ÷ 광고비 · 광고비 ${U.krw(s.adSpend)} ${U.deltaHtml(U.delta(s.adSpend, p.adSpend), true)} · <a href="#ads">광고 성과</a>` : '광고 리포트 없음 · <a href="#data">올리기</a>' },
-      { k: '전환율', v: U.pct(s.cvr, 2), sub: `유입 ${U.num(s.visits)} · ${lab} ${U.pct(p.cvr, 2)}` },
+      { k: '전환율', v: U.pct(s.cvr, 2), sub: `유입 ${U.num(s.visits)} · ${lab} ${U.pct(p.cvr, 2)}${MD.calc.cvrNote(s) ? `<br><span class="muted">${MD.calc.cvrNote(s)}</span>` : ''}` },
       { k: '주문 수', v: U.num(s.orders), sub: U.deltaHtml(U.delta(s.orders, p.orders)) },
       { k: '객단가', v: U.won(s.aov), sub: U.deltaHtml(U.delta(s.aov, p.aov)) },
     ];
