@@ -44,6 +44,8 @@
       example: [{ 채널: '네이버 스마트스토어', 유형: '오픈마켓', 수수료율: 0.055, 월목표: 60000000 }],
     },
   };
+  // 여러 칸을 묶은 중복 판정 키. '|'로 이으면 채널 'A|B'·SKU 'C'와 채널 'A'·SKU 'B|C'가 같아진다 (Codex 분리 2단계 R1-02)
+  const rowKey = (...a) => JSON.stringify(a);
   const NUMS = ['qty', 'sales', 'discount', 'orders', 'visits', 'ad', 'price', 'cost', 'stock', 'fee', 'target', 'spend', 'revenue', 'imp', 'clicks', 'conv', 'ourPrice', 'rank', 'reviews', 'rating'];
 
   // 열 이름(별칭)으로 항목 ↔ 파일 열을 자동으로 맞춘다
@@ -79,7 +81,8 @@
           if (!/\d/.test(cleaned) || !Number.isFinite(v)) return reject(`${spec.cols[k][0]} 숫자 아님`);
           if (spec === SPECS.sales && (k === 'qty' || k === 'orders') && !(v > 0)) return reject(`${spec.cols[k][0]} 0 이하`);
           // 유입 자료의 방문·광고비·주문 건수는 0이 정상 값이다 (주문 없는 날, 광고 안 한 날). 음수만 거부
-          if ((spec === SPECS.traffic || spec === SPECS.ads || spec === SPECS.compete) && v < 0) return reject(`${spec.cols[k][0]} 음수`);
+          // 상품 원가·판매가·재고도 음수면 원가가 이익에 더해진다 (Codex 분리 2단계 R1-01)
+          if ((spec === SPECS.traffic || spec === SPECS.ads || spec === SPECS.compete || spec === SPECS.products) && v < 0) return reject(`${spec.cols[k][0]} 음수`);
           if (spec === SPECS.compete && (k === 'price' || k === 'ourPrice') && !(v > 0)) return reject(`${spec.cols[k][0]} 0원`); // 0원 조사가는 가격 격차를 계산할 수 없다
           // 수수료: '12%'·'0.5%'처럼 %가 붙었거나 1보다 크면(12) 백분율, 아니면(0.12) 비율로 본다
           if (k === 'fee' && (raw.includes('%') || v > 1)) v = v / 100;
@@ -105,7 +108,7 @@
   function importAds(rows, mode) {
     MD.store.ensureReal();
     const D = MD.data, OPT = ['revenue', 'imp', 'clicks', 'conv'];
-    const key = (r) => r.date + '|' + r.channel + '|' + (r.campaign || '');
+    const key = (r) => rowKey(r.date, r.channel, r.campaign || '');
     const agg = new Map();
     for (const r of rows) {
       const k = key(r), miss = OPT.filter((f) => r[f] == null), prev = agg.get(k);
@@ -128,7 +131,7 @@
   // 경쟁 상품: 같은 조사일·SKU·경쟁상품·채널은 마지막 행으로 (가격은 합산하면 안 되는 값)
   function importCompete(rows, mode) {
     MD.store.ensureReal();
-    const D = MD.data, key = (r) => [r.date, r.sku, r.rival, r.channel || ''].join('|');
+    const D = MD.data, key = (r) => rowKey(r.date, r.sku, r.rival, r.channel || '');
     const m = new Map(mode === 'replace' ? [] : D.compete.map((r) => [key(r), r]));
     rows.forEach((r) => m.set(key(r), { ...r, channel: r.channel || '' }));
     D.compete = [...m.values()];
@@ -151,7 +154,7 @@
       if (kind === 'traffic') rows.forEach((r) => { r.vOk = r.visits != null; r.adOk = r.ad != null; r.ordOk = r.orders != null; if (r.visits == null) r.visits = 0; if (r.ad == null) r.ad = 0; if (r.orders == null) delete r.orders; });
       // 한 파일 안의 같은 일자·채널(·SKU) 행은 먼저 합산한다 (주문 단위 내역이 여러 줄인 경우).
       // 그다음 교체는 그대로 저장, 추가·갱신은 같은 키의 기존 값을 이 합계로 덮어쓴다 — 같은 파일을 어느 방식으로 다시 올려도 결과가 같다.
-      const key = kind === 'sales' ? (r) => r.date + '|' + r.channel + '|' + r.sku : (r) => r.date + '|' + r.channel;
+      const key = kind === 'sales' ? (r) => rowKey(r.date, r.channel, r.sku) : (r) => rowKey(r.date, r.channel);
       const sumKeys = kind === 'sales' ? ['qty', 'sales', 'discount', 'orders'] : ['visits', 'ad'];
       const agg = new Map();
       for (const r of rows) {
@@ -206,10 +209,10 @@
   // ---------- 가져오기 전 확인 (로드맵 1순위, Codex 합의 2026-10-31) ----------
   // 파일을 고르면 바로 반영하지 않고, 열 이름 행·열 매핑·반영 결과 미리보기를 보여 준 뒤 [반영하기]에서만 저장한다.
   const KEYF = {
-    sales: [(r) => r.date + '|' + r.channel + '|' + r.sku, '일자·채널·SKU'],
-    traffic: [(r) => r.date + '|' + r.channel, '일자·채널'],
-    ads: [(r) => r.date + '|' + r.channel + '|' + (r.campaign || ''), '일자·채널·캠페인'],
-    compete: [(r) => [r.date, r.sku, r.rival, r.channel || ''].join('|'), '조사일·SKU·경쟁상품·채널'],
+    sales: [(r) => rowKey(r.date, r.channel, r.sku), '일자·채널·SKU'],
+    traffic: [(r) => rowKey(r.date, r.channel), '일자·채널'],
+    ads: [(r) => rowKey(r.date, r.channel, r.campaign || ''), '일자·채널·캠페인'],
+    compete: [(r) => rowKey(r.date, r.sku, r.rival, r.channel || ''), '조사일·SKU·경쟁상품·채널'],
     products: [(r) => r.sku, 'SKU'],
     channels: [(r) => r.name, '채널명'],
   };
@@ -306,37 +309,42 @@
   const optNum = (r, keys) => keys.find((k) => r[k] != null && r[k] !== '' && !okNum(r[k]));
   const fill = (r, defs) => { for (const [k, v] of Object.entries(defs)) if (r[k] == null || r[k] === '') r[k] = typeof v === 'function' ? v(r) : v; };
   const okDateOrEmpty = (v) => v == null || v === '' || okDate(v);
+  // 업로드(mapRows)와 같은 값 범위 — 백업 복원으로 업로드 검사를 우회하지 않게 (Codex 분리 2단계 R3-01). 값이 없는 칸은 위 기본값 정책을 따른다
+  const neg = (r, keys, label) => { const k = keys.find((f) => r[f] != null && r[f] !== '' && r[f] < 0); return k ? `${label[k] || k}(0 이상)` : null; };
   const ROW_RULES = {
     sales: (r) => {
       if (!okDate(r.date)) return '날짜'; if (!okText(r.channel)) return '채널'; if (!okText(r.sku)) return 'SKU'; if (!okNum(r.sales)) return '매출';
       const n = optNum(r, ['qty', 'orders', 'discount']); if (n) return n;
+      const z = ['qty', 'orders'].find((f) => r[f] != null && r[f] !== '' && !(r[f] > 0)); if (z) return `${z === 'qty' ? '수량' : '주문수'}(0 초과)`;
       if (r.orders == null && r.ordSrc == null) r.ordSrc = 'qty'; // 주문 수를 수량으로 채운 표시(가져오기와 같음)
       fill(r, { qty: 1, orders: (x) => x.qty, discount: 0 });
       return null;
     },
     traffic: (r) => {
       if (!okDate(r.date)) return '날짜'; if (!okText(r.channel)) return '채널';
-      const n = optNum(r, ['visits', 'ad', 'orders']); if (n) return n;
+      const n = optNum(r, ['visits', 'ad', 'orders']) || neg(r, ['visits', 'ad', 'orders'], { visits: '방문수', ad: '광고비', orders: '주문수' }); if (n) return n;
       if (r.vOk == null) r.vOk = r.visits != null; if (r.adOk == null) r.adOk = r.ad != null; if (r.ordOk == null) r.ordOk = r.orders != null;
       fill(r, { visits: 0, ad: 0 });
       return null;
     },
     ads: (r) => {
       if (!okDate(r.date)) return '날짜'; if (!okText(r.channel)) return '채널'; if (!okNum(r.spend)) return '광고비';
-      const n = optNum(r, ['revenue', 'imp', 'clicks', 'conv']); if (n) return n;
+      const n = optNum(r, ['revenue', 'imp', 'clicks', 'conv']) || neg(r, ['spend', 'revenue', 'imp', 'clicks', 'conv'], { spend: '광고비', revenue: '광고매출', imp: '노출', clicks: '클릭', conv: '전환' }); if (n) return n;
       if (r.miss != null && !Array.isArray(r.miss)) return 'miss';
       // 업로드(importAds)와 같이 값이 없는 선택 항목은 miss로 남겨 ROAS 등에서 그 행을 뺀다 (Codex 기능 K R4-01)
       const miss = [...new Set([...(r.miss || []), ...['revenue', 'imp', 'clicks', 'conv'].filter((f) => r[f] == null)])];
       if (miss.length) r.miss = miss; else delete r.miss;
       return null;
     },
-    compete: (r) => (!okDate(r.date) ? '조사일' : !okText(r.sku) ? 'SKU' : !okText(r.rival) ? '경쟁상품' : !okNum(r.price) ? '경쟁가' : optNum(r, ['ourPrice', 'rank', 'reviews', 'rating']) || null),
+    compete: (r) => (!okDate(r.date) ? '조사일' : !okText(r.sku) ? 'SKU' : !okText(r.rival) ? '경쟁상품' : !okNum(r.price) ? '경쟁가' : !(r.price > 0) ? '경쟁가(0원 초과)'
+      : optNum(r, ['ourPrice', 'rank', 'reviews', 'rating']) || (r.ourPrice != null && r.ourPrice !== '' && !(r.ourPrice > 0) ? '우리 판매가(0원 초과)' : null) || neg(r, ['rank', 'reviews', 'rating'], { rank: '순위', reviews: '리뷰수', rating: '평점' }) || null),
     channels: (r) => {
       if (!okText(r.name)) return '채널명'; const n = optNum(r, ['fee', 'target']); if (n) return n;
       fill(r, { fee: 0, target: 0 });
       return r.fee >= 0 && r.fee < 1 ? null : '수수료율(0 이상 100% 미만)'; // 가져오기·직접 수정과 같은 범위 (Codex 개선 6단계 R2-01)
     },
-    products: (r) => { if (!okText(r.sku)) return 'SKU'; const n = optNum(r, ['price', 'cost', 'stock']); if (n) return n; fill(r, { price: 0, cost: 0, stock: 0, name: (x) => x.sku }); return null; },
+    // 음수 원가는 이익에 더해진다 — 업로드·직접 수정과 같이 0 이상만 (Codex 분리 2단계 R2-01)
+    products: (r) => { if (!okText(r.sku)) return 'SKU'; const n = optNum(r, ['price', 'cost', 'stock']); if (n) return n; fill(r, { price: 0, cost: 0, stock: 0, name: (x) => x.sku }); const neg = [['price', '판매가'], ['cost', '원가'], ['stock', '재고']].find(([f]) => r[f] < 0); return neg ? `${neg[1]}(0 이상)` : null; },
     targets: (r) => (typeof r.month !== 'string' || !/^\d{4}-\d{2}$/.test(r.month) ? '월' : optNum(r, ['sales', 'roas', 'cvr', 'adBudget', 'margin']) || null),
     promotions: (r) => {
       if (!okText(r.name)) return '행사명'; if (!okText(r.channel)) return '채널'; if (!okDate(r.start)) return '시작일'; if (!okDate(r.end)) return '종료일';
@@ -634,8 +642,9 @@
     ca.onclick = async () => {
       const n = closeRows.reduce((a, r) => a + srcs.filter(([k]) => r.last[k]).length, 0);
       if (!n || !confirm(`${n}칸을 각 자료의 마지막 날로 확인합니다. 실제로 그날까지 자료가 다 들어왔는지 확인하셨나요?`)) return;
+      const before = JSON.parse(JSON.stringify(MD.data.closes || {})); // 저장 실패 시 되돌릴 이전 마감 확인 — 칸별 수정과 같음 (Codex 분리 2단계 R4-01)
       closeRows.forEach((r) => srcs.forEach(([k]) => { if (r.last[k]) MD.calc.setClose(r.ch, k, r.last[k]); }));
-      const ok = await MD.store.save(['closes']); const y = window.scrollY; MD.rerender(); window.scrollTo(0, y);
+      const ok = await MD.store.save(['closes']); if (!ok) MD.data.closes = before; const y = window.scrollY; MD.rerender(); window.scrollTo(0, y);
       if (ok) U.toast('자료 마감을 확인했습니다.'); // 실패 안내는 저장 함수가 띄운다
     };
 
@@ -846,6 +855,7 @@
 
     // 사용자가 고친 행은 userSet으로 표시 — 예시 → 실데이터 전환 때 이 행만 남긴다
     const masterSave = (k) => (kind, row, meta) => {
+      if (k === 'products' && kind === 'edit' && meta && ['price', 'cost', 'stock'].includes(meta.key) && !(Number.isFinite(meta.value) && meta.value >= 0)) { U.toast('판매가·원가·재고는 0 이상으로 입력하세요.', 'bad'); return false; }
       if (k === 'channels' && kind === 'edit' && meta && meta.key === 'fee' && !(Number.isFinite(meta.value) && meta.value >= 0 && meta.value < 1)) { U.toast('수수료율은 0 이상 100% 미만으로 입력하세요.', 'bad'); return false; }
       if (k === 'channels' && kind === 'edit' && meta && meta.key === 'name' && meta.old !== meta.value) {
         const to = String(meta.value).trim(), from = meta.old;

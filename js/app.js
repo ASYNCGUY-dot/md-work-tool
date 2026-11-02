@@ -14,8 +14,8 @@
   // 표시: shared = 양쪽 공용 화면, unified = 아직 MD·광고가 한 화면에 섞인 통합 화면, 바로가기 묶음 = 다른 공간 화면으로 이동(공간은 그대로)
   const SPACES = {
     md: { name: 'MD 업무', start: 'dashboard', nav: [
-      ['시작하기', [['guide'], ['dashboard']]],
-      ['실적 확인', [['goals', 'unified'], ['insight'], ['channels', 'shared'], ['products'], ['compete'], ['promotions', 'shared']]],
+      ['시작하기', [['guide', 'shared'], ['dashboard']]],
+      ['실적 확인', [['goals', 'shared'], ['insight'], ['channels', 'shared'], ['products'], ['compete'], ['promotions', 'shared']]],
       ['상품·가격 기획', [['pricing'], ['sourcing']]],
       ['운영·마감', [['settlement'], ['vendors'], ['orders'], ['checklist']]],
       ['보고', [['report', 'unified']]],
@@ -23,9 +23,9 @@
       ['마케팅·광고 바로가기', [['ads'], ['ranks']], 'mkt'],
     ] },
     mkt: { name: '마케팅·광고', start: 'ads', nav: [
-      ['시작하기', [['ads'], ['guide', 'unified']]],
+      ['시작하기', [['ads'], ['guide', 'shared']]],
       ['유입·순위', [['channels', 'shared'], ['ranks']]],
-      ['행사·목표', [['promotions', 'shared'], ['goals', 'unified']]],
+      ['행사·목표', [['promotions', 'shared'], ['goals', 'shared']]],
       ['보고', [['report', 'unified']]],
       ['설정', [['data', 'shared']]],
       ['MD 업무 바로가기', [['compete'], ['insight'], ['checklist']], 'md'],

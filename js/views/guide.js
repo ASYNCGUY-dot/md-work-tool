@@ -5,33 +5,55 @@
   const monthEnd = (m) => { const [y, mm] = m.split('-').map(Number); return U.fmt(new Date(Date.UTC(y, mm, 0))); };
   const prevMonth = (m) => { const [y, mm] = m.split('-').map(Number); return U.fmt(new Date(Date.UTC(y, mm - 2, 1))).slice(0, 7); };
   const label = (m) => `${m.slice(0, 4)}년 ${Number(m.slice(5))}월`;
+  // 분리 2단계: 월초 체크를 작업 공간별 단계로. 기본은 현재 공간, 화면에서 다른 공간 단계도 볼 수 있다
+  let kind = null, seenSpace;
 
   // 월초 단계별 상태 (done: true 완료 · false 할 일 · null 해당 없음)
-  function steps(M) {
+  function steps(M, sp) {
     const d = MD.data, P = prevMonth(M), pEnd = monthEnd(P);
     const salesCh = [...new Set(C.inRange(d.sales, P + '-01', pEnd).map((r) => r.channel))];
     const notClosed = salesCh.filter((c) => (C.closeOf(c, 'sales') || '') < pEnd);
     const lag = d.maxDate ? U.diffDays(d.maxDate, U.today()) : null;
     const chNoTarget = d.channels.filter((c) => C.targetInfo(c.name, M).source !== 'month');
     const co = C.targetRow('', M) || {};
-    const kpiSet = ['margin', 'adBudget', 'roas', 'cvr'].filter((k) => co[k] != null);
     const lastAd = d.ads.length ? d.ads[d.ads.length - 1].date : null, lastCp = d.compete.length ? d.compete[d.compete.length - 1].date : null;
+    const lastTr = d.traffic.length ? d.traffic[d.traffic.length - 1].date : null;
     const promosM = d.promotions.filter((p) => p.start <= monthEnd(M) && p.end >= M + '-01');
     const eventsM = d.events.filter((e) => e.date <= monthEnd(M) && (e.end || e.date) >= M + '-01');
+    const mm = Number(M.slice(5)), pm = Number(P.slice(5));
+    const report = { key: 'report', title: '3. 지난달 실적 보고서 확정', how: '보고서 화면에서 기간을 "지난 달"로 두고 인쇄·PDF, 엑셀, 메신저 복사로 공유합니다. 다음 액션 칸을 직접 고치면 그 기간 보고서에 저장됩니다.', href: '#report', action: 'lm',
+      done: null, state: '보고서 열기 버튼은 기간을 지난 달로 맞춰 엽니다' };
+    if (sp === 'mkt') {
+      // 광고 공간: 유입·광고 리포트 → 마감 → 보고서 → 광고 목표 → 행사 일정
+      const adCh = [...new Set([...C.inRange(d.ads, P + '-01', pEnd), ...C.inRange(d.traffic, P + '-01', pEnd)].map((r) => r.channel))];
+      const adOpen = adCh.filter((c) => (d.ads.some((r) => r.channel === c) && (C.closeOf(c, 'ads') || '') < pEnd) || (d.traffic.some((r) => r.channel === c) && (C.closeOf(c, 'traffic') || '') < pEnd));
+      const adKpi = ['adBudget', 'roas', 'cvr'].filter((k) => co[k] != null);
+      return [
+        { key: 'adUpload', title: '1. 지난달 말일까지 유입·광고 리포트 올리기', how: '데이터 관리 → 통합 양식의 유입·광고 시트(또는 개별 양식)를 올립니다. 유입 파일에는 플랫폼 주문 건수, 광고 리포트에는 광고 매출·노출·클릭·전환·캠페인 열을 넣을수록 분석이 늘어납니다.', href: '#data',
+          done: lastTr || lastAd ? (lastTr || '') >= pEnd && (lastAd || '') >= pEnd : false, state: `유입 파일 마지막 날 ${lastTr || '없음'} · 광고 리포트 마지막 날 ${lastAd || '없음'}` },
+        { key: 'adClose', title: '2. 지난달 유입·광고 자료 마감 확인', how: '데이터 관리 → 자료 마감 확인에서 채널마다 유입·광고 리포트의 확인일을 지난달 말일까지 찍습니다. 확인일까지만 ROAS·전환율 목표를 판정합니다.', href: '#data',
+          done: adCh.length ? !adOpen.length : null, state: adCh.length ? (adOpen.length ? `${pm}월 말일까지 확인 안 된 채널 ${adOpen.length}개: ${adOpen.slice(0, 4).join(', ')}` : `${adCh.length}개 채널 모두 ${pEnd}까지 확인`) : '지난달 유입·광고 자료 없음' },
+        report,
+        { key: 'adTarget', title: `4. ${mm}월 광고 목표 입력`, how: '목표·KPI 달성 → 광고 목표 탭에서 광고비 예산과 전사 광고 ROAS·전환율 목표를 넣습니다. 채널별 ROAS·전환율 목표는 채널마다 따로 넣고, 비우면 그 채널은 판정하지 않습니다.', href: '#goals', focus: 'ad',
+          done: co.adBudget != null && (co.roas != null || co.cvr != null), state: `광고비 예산 ${co.adBudget != null ? '입력' : '미입력'} · 전사 광고 KPI ${adKpi.length}/3개 (예산·ROAS·전환율)` },
+        { key: 'adPlan', title: `5. ${mm}월 행사 일정 확인`, how: '프로모션 화면에서 이번 달 행사(채널·기간·예산)를 확인하고 광고 집행 계획을 맞춥니다. 행사는 MD 업무와 같은 자료를 씁니다.', href: '#promotions',
+          done: promosM.length ? true : false, state: `이번 달 행사 ${promosM.length}건` },
+      ];
+    }
+    const chTargetsOk = d.channels.length ? !chNoTarget.length : null;
     return [
       { key: 'upload', title: '1. 지난달 말일까지 자료 올리기', how: '데이터 관리 → 통합 양식(판매·유입·광고·경쟁 시트)을 채워 한 번에 올립니다. 개별 양식으로 올려도 됩니다.', href: '#data',
         done: d.maxDate ? d.maxDate >= pEnd : false, state: d.maxDate ? `판매 자료 마지막 날 ${d.maxDate}${lag != null ? ` (오늘보다 ${lag}일 전)` : ''}` : '판매 자료 없음' },
       { key: 'close', title: '2. 지난달 자료 마감 확인', how: '데이터 관리 → 자료 마감 확인에서 채널마다 지난달 말일까지 확인일을 찍습니다. 정산·취소가 늦게 들어오는 채널은 들어온 뒤에 찍으세요. 확인일까지만 목표를 판정합니다.', href: '#data',
         done: salesCh.length ? !notClosed.length : null, state: salesCh.length ? (notClosed.length ? `${P.slice(5)}월 말일까지 확인 안 된 채널 ${notClosed.length}개: ${notClosed.slice(0, 4).join(', ')}` : `${salesCh.length}개 채널 모두 ${pEnd}까지 확인`) : '지난달 판매 자료 없음' },
-      { key: 'report', title: '3. 지난달 실적 보고서 확정', how: '보고서 화면에서 기간을 "지난 달"로 두고 인쇄·PDF, 엑셀, 메신저 복사로 공유합니다. 다음 액션 칸을 직접 고치면 그 기간 보고서에 저장됩니다.', href: '#report', action: 'lm',
-        done: null, state: '보고서 열기 버튼은 기간을 지난 달로 맞춰 엽니다' },
-      { key: 'target', title: `4. ${Number(M.slice(5))}월 목표 입력`, how: '목표·KPI 달성 → 목표 입력에서 채널별 매출 목표를 넣습니다. "전년 같은 달 × (1+성장률)" 채우기·이전 달 복사를 쓰면 빠릅니다. 이익률·광고비 예산·광고 ROAS·전환율 목표와 근거 메모도 함께 남기세요.', href: '#goals',
-        done: d.channels.length ? !chNoTarget.length && kpiSet.length > 0 : null,
-        state: `채널 매출 목표 ${d.channels.length - chNoTarget.length}/${d.channels.length}개 입력${chNoTarget.length ? ` (미입력: ${chNoTarget.slice(0, 3).map((c) => c.name).join(', ')}${chNoTarget.length > 3 ? ' 외' : ''} — 기본값 또는 미설정)` : ''} · 전사 KPI ${kpiSet.length}/4개` },
-      { key: 'plan', title: `5. ${Number(M.slice(5))}월 행사·이슈 등록`, how: '프로모션 화면에 이번 달 행사를 등록하고, 매출 변동 분석 → 이슈 기록에 예정된 외부 요인(시즌·경쟁사 행사·날씨·공휴일 변경)을 적어 둡니다. 월말에 변동 원인을 찾을 때 근거가 됩니다.', href: '#promotions',
+      report,
+      { key: 'target', title: `4. ${mm}월 MD 목표 입력`, how: '목표·KPI 달성 → MD 목표 탭에서 채널별 매출 목표와 이익률 목표를 넣습니다. "전년 같은 달 × (1+성장률)" 채우기·이전 달 복사를 쓰면 빠릅니다. 근거 메모도 함께 남기세요. 광고 목표는 마케팅·광고 공간의 월초 체크에서 다룹니다.', href: '#goals', focus: 'md',
+        done: chTargetsOk == null ? null : chTargetsOk && co.margin != null,
+        state: `채널 매출 목표 ${d.channels.length - chNoTarget.length}/${d.channels.length}개 입력${chNoTarget.length ? ` (미입력: ${chNoTarget.slice(0, 3).map((c) => c.name).join(', ')}${chNoTarget.length > 3 ? ' 외' : ''} — 기본값 또는 미설정)` : ''} · 이익률 목표 ${co.margin != null ? '입력' : '미입력'}` },
+      { key: 'plan', title: `5. ${mm}월 행사·이슈 등록`, how: '프로모션 화면에 이번 달 행사를 등록하고, 매출 변동 분석 → 이슈 기록에 예정된 외부 요인(시즌·경쟁사 행사·날씨·공휴일 변경)을 적어 둡니다. 월말에 변동 원인을 찾을 때 근거가 됩니다.', href: '#promotions',
         done: promosM.length || eventsM.length ? true : false, state: `이번 달 행사 ${promosM.length}건 · 이슈 기록 ${eventsM.length}건` },
-      { key: 'ads', title: '6. 광고 리포트·경쟁 조사 갱신', how: '광고 리포트(광고비·광고 매출, 가능하면 노출·클릭·전환·캠페인)와 경쟁 상품 가격·순위 조사를 올립니다. 열을 더 넣을수록 광고 성과·경쟁 비교 분석이 늘어납니다.', href: '#ads',
-        done: lastAd ? lastAd >= pEnd : false, state: `광고 리포트 마지막 날 ${lastAd || '없음'} · 경쟁 조사 마지막 날 ${lastCp || '없음'}` },
+      { key: 'compete', title: '6. 경쟁 조사 갱신', how: '경쟁 상품 가격·순위·리뷰 조사를 올립니다(주 1회 같은 요일 권장). 열을 더 넣을수록 경쟁 비교 분석이 늘어납니다.', href: '#compete',
+        done: lastCp ? lastCp >= pEnd : false, state: `경쟁 조사 마지막 날 ${lastCp || '없음'}` },
     ];
   }
 
@@ -47,7 +69,7 @@
     ['매출총이익 / 이익률', '순매출 − 수수료(매출×수수료율÷1.1) − 원가(수량×입고원가) / 매출총이익 ÷ 순매출'],
     ['공헌이익', '매출총이익 − 광고비÷1.1 (광고비 출처는 [데이터 관리 → 계산 기준]에서 유입 파일·광고 리포트 중 선택, 기본은 유입 파일)'],
     ['광고 ROAS', '광고 리포트의 광고 매출 ÷ 광고비 (플랫폼 귀속 매출, 광고 매출이 빈 행은 제외)'],
-    ['전환율', '주문 ÷ 방문. 목표 판정은 유입 파일의 주문 건수(플랫폼 통계)로만'],
+    ['전환율', '유입 파일의 플랫폼 주문 건수 ÷ 방문(주문·방문 수가 모두 있는 행). 플랫폼 주문 수가 없으면 판매 파일 주문수 기준 참고값으로 표시. 목표 판정은 플랫폼 주문 건수로만'],
     ['기간 목표 대비', '선택 기간 실적 ÷ 그 기간에 일수로 나눈 목표'],
     ['월 목표 달성률 / 계획 대비', '누적 실적 ÷ 월 목표 / 누적 실적 ÷ (월 목표 × 경과일 ÷ 월 일수)'],
     ['실적 기준일', '판매가 있는 모든 채널의 자료 마감 확인일 중 가장 이른 날(미확인 채널이 있으면 자료 마지막 날 + 경고)'],
@@ -56,7 +78,10 @@
 
   MD.views.guide = function (el) {
     const d = MD.data;
-    const M = U.today().slice(0, 7), list = steps(M);
+    const sp = (MD.state && MD.state.space) || 'md';
+    if (seenSpace !== sp) { kind = null; seenSpace = sp; }
+    const K = kind || sp;
+    const M = U.today().slice(0, 7), list = steps(M, K);
     const doneN = list.filter((s) => s.done === true).length, need = list.filter((s) => s.done !== null).length;
     const S = MD.SPECS || {};
     const unlock = { sales: '대시보드·상품·목표 실적·보고서', traffic: '전환율·유입 분석, 전환율 목표', ads: '광고 ROAS(필수) → 노출·클릭·전환·캠페인 열로 CTR·CPC·CPA·캠페인 분석', products: '이익·이익률, 재고 일수, ABC', channels: '수수료·월 기본 목표', compete: '경쟁 가격 격차 → 순위·리뷰·평점 열로 순위 변화·리뷰 격차' };
@@ -64,10 +89,11 @@
     el.innerHTML = `
       <div id="todayHub"></div>
       ${d.isSample ? '<div class="note" style="margin-bottom:12px">지금은 예시 데이터입니다. 아래 상태 표시는 예시 기준이며, 내 데이터를 올리면 실제 상태로 바뀝니다.</div>' : ''}
-      <div class="card"><div class="card-head"><h2>${label(M)} 월초 체크</h2><span class="muted">${doneN}/${need}단계 완료 · 순서대로 진행하세요</span></div>
+      <div class="card"><div class="card-head"><h2>${label(M)} 월초 체크</h2><span class="muted">${doneN}/${need}단계 완료 · 순서대로 진행하세요</span><span class="spacer"></span>
+        <div class="seg" role="group" aria-label="월초 체크 종류"><button data-gk="md" class="${K === 'md' ? 'on' : ''}" aria-pressed="${K === 'md'}">MD 업무</button><button data-gk="mkt" class="${K === 'mkt' ? 'on' : ''}" aria-pressed="${K === 'mkt'}">마케팅·광고</button></div></div>
         <ol class="guide-steps">${list.map((s) => `<li class="${s.done === true ? 'done' : s.done === false ? 'todo' : 'na'}">
           <div class="row"><b>${U.esc(s.title)}</b><span class="tag ${s.done === true ? 'good' : s.done === false ? 'warn' : 'neutral'}">${s.done === true ? '완료' : s.done === false ? '할 일' : '확인'}</span><span class="spacer"></span>
-            <a class="btn small" href="${s.href}" ${s.action ? `data-act="${s.action}"` : ''}>${s.action ? '지난 달 보고서 열기' : '바로 가기'}</a></div>
+            <a class="btn small" href="${s.href}" ${s.action ? `data-act="${s.action}"` : ''}${s.focus ? ` data-focus="${s.focus}"` : ''}>${s.action ? '지난 달 보고서 열기' : '바로 가기'}</a></div>
           <div class="muted" style="font-size:12px;margin-top:2px">${U.esc(s.state)}</div>
           <div style="margin-top:4px">${U.esc(s.how)}</div></li>`).join('')}</ol>
       </div>
@@ -87,6 +113,9 @@
           <div class="table-wrap"><table><tbody>${DEFS.map(([k, v]) => `<tr><td style="white-space:nowrap"><b>${k}</b></td><td>${U.esc(v)}</td></tr>`).join('')}</tbody></table></div></div>
       </div>`;
     el.querySelector('#gdTpl').onclick = () => MD.downloadUnifiedTemplate();
+    el.querySelectorAll('[data-gk]').forEach((b) => (b.onclick = () => { kind = b.dataset.gk; MD.rerender(); }));
+    // 목표 단계는 해당 목표 탭을 열어 준다
+    el.querySelectorAll('[data-focus]').forEach((a) => (a.onclick = () => { MD.state.focus = { view: 'goals', id: a.dataset.focus }; }));
     el.querySelectorAll('[data-act="lm"]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); MD.state.preset = 'lm'; MD.refresh(); location.hash = '#report'; }));
     if (MD.renderToday) MD.renderToday(el.querySelector('#todayHub')); // '오늘 확인할 일' 허브 (개선 4단계)
   };

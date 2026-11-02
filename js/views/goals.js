@@ -8,6 +8,9 @@
 (function () {
   const U = MD.util, C = MD.calc;
   let month = null, year = null, wide = false, seenMax, openCh = false;
+  // 분리 2단계: MD 목표(매출·이익률) / 광고 목표(ROAS·전환율·광고비 예산) 탭. 저장 구조(targets)는 하나를 공유하고,
+  // 기본 탭은 작업 공간을 따른다(공간을 바꾸면 다시 공간 기본으로)
+  let tab = null, seenSpace;
 
   const ym = (s) => s.slice(0, 7);
   const monthStart = (m) => m + '-01';
@@ -225,6 +228,10 @@
     const asOf = d.maxDate || U.today();
     // 자료가 바뀌면(업로드·복원·예시 전환) 기준 달을 새 자료 기준일의 달로 되돌린다
     if (!month || seenMax !== d.maxDate) { month = ym(asOf); year = month.slice(0, 4); seenMax = d.maxDate; }
+    const sp = (MD.state && MD.state.space) || 'md';
+    if (seenSpace !== sp) { tab = null; seenSpace = sp; }
+    if (MD.state && MD.state.focus && MD.state.focus.view === 'goals') { tab = MD.state.focus.id === 'ad' ? 'ad' : 'md'; MD.state.focus = null; } // 월초 체크에서 들어온 경우
+    const T = tab || (sp === 'mkt' ? 'ad' : 'md');
     const st = MD.goalStatus(month);
     const k = MD.goalKpis(month);
     const yt = ytd(month.slice(0, 4));
@@ -240,6 +247,9 @@
     const pctOr = (v, dgt = 1) => (v == null ? '-' : U.pct(v, dgt));
     const gapTxt = st.gap == null ? '' : st.gap > 0 ? `계획보다 <b>${U.krw(st.gap)}원 부족</b>` : `계획보다 <b>${U.krw(-st.gap)}원 초과</b>`;
 
+    // 이익률·광고비 예산 카드: MD 탭은 이익률·예산, 광고 탭은 예산을 보여 준다
+    const marginKpi = `<div class="kpi"><div class="k">이익률 목표</div><div class="v">${pctOr(k.margin)}</div><div class="s">${k.marginTarget == null ? '목표 미설정' : k.noCostHold ? `목표 ${U.pct(k.marginTarget)} · <span class="tag warn">판정 보류: 원가 미입력 매출 ${U.krw(k.noCost)}원</span>` : `목표 ${U.pct(k.marginTarget)} · ${k.margin == null ? '' : `${k.margin - k.marginTarget >= 0 ? '+' : ''}${((k.margin - k.marginTarget) * 100).toFixed(1)}%p`}${k.noCost ? ` · 원가 미입력 매출 ${U.krw(k.noCost)}원 포함` : ''}`}</div></div>`;
+    const budgetKpi = `<div class="kpi"><div class="k">광고비 예산 사용</div><div class="v">${pctOr(k.usage)}</div><div class="s">${k.budget == null ? '예산 미설정' : `${U.krw(k.spent)}원(${k.spentSrc}) / 예산 ${U.krw(k.budget)}원 · 경과율 ${U.pct(k.elapsedShare, 0)}`}${k.budget === 0 && k.spent > 0 ? ' · <span class="tag bad">예산 0인데 지출</span>' : k.usage != null && k.usage > k.elapsedShare + 0.05 ? ' · <span class="tag warn">경과율보다 빨리 쓰는 중</span>' : ''}</div></div>`;
     el.innerHTML = `
       <div class="row" style="margin-bottom:12px">
         <button class="btn small" id="gPrev" aria-label="이전 달">◀</button>
@@ -250,8 +260,10 @@
         <span class="muted" title="${U.won(yt.actual)} / 연간 목표 ${U.won(yt.annual)}">· ${month.slice(0, 4)}년 누적 ${yt.annual ? U.pct(yt.actual / yt.annual) : '-'} (기준일까지 계획 대비 ${yt.plan ? U.pct(yt.actual / yt.plan) : '-'}${yt.partial ? ', 1월 자료 일부 없음' : ''}${yt.unsetMonths ? `, 목표 없는 달 ${yt.unsetMonths}개` : ''})</span>
         ${stale != null && stale > 3 ? `<span class="badge bad">자료가 오늘보다 ${stale}일 늦음</span>` : ''}
         <span class="spacer"></span>
+        <div class="seg" role="group" aria-label="목표 종류"><button data-gt="md" class="${T === 'md' ? 'on' : ''}" aria-pressed="${T === 'md'}">MD 목표</button><button data-gt="ad" class="${T === 'ad' ? 'on' : ''}" aria-pressed="${T === 'ad'}">광고 목표</button></div>
         <button class="btn small" id="gToInput">목표 입력으로</button>
       </div>
+      ${T === 'md' ? `
       <div class="kpis kpis-4">
         <div class="kpi"><div class="k">월 목표 달성률</div><div class="v">${pctOr(st.achieve)}</div>
           <div class="s">실적 ${U.krw(st.actual)}원 / 월 목표 ${st.target == null ? '미설정' : U.krw(st.target) + '원'}</div>${st.achieve != null ? `<div class="bar-track" title="경과율 ${U.pct(st.elapsed / st.days, 0)}"><div class="bar-fill" style="width:${Math.min(100, st.achieve * 100)}%"></div><div class="bar-mark" style="left:${(st.elapsed / st.days) * 100}%"></div></div>` : ''}</div>
@@ -259,20 +271,26 @@
         <div class="kpi"><div class="k">남은 기간 필요 일매출</div><div class="v">${st.need == null ? '-' : st.remain === 0 ? '월 목표 달성' : U.krw(st.need) + '원'}</div><div class="s">${st.remainDays}일 남음 · 최근 7일 평균 ${st.run == null ? '관측 부족' : U.krw(st.run) + '원'}</div></div>
         <div class="kpi"><div class="k">월말 예상 (참고)</div><div class="v">${st.forecast == null ? '-' : U.krw(st.forecast) + '원'}</div><div class="s">${st.fAchieve == null ? (st.remainDays === 0 ? '월 마감' : '관측 부족') : `예상 달성률 ${U.pct(st.fAchieve)}`}</div></div>
       </div>
-      <div class="kpis kpis-4" style="margin-top:12px">
+      <div class="kpis kpis-3" style="margin-top:12px">
+        ${marginKpi}
+        ${budgetKpi}
+        <div class="kpi"><div class="k">광고 목표 요약</div><div class="v" style="font-size:15px">ROAS ${rs.roas.actual == null ? '-' : U.pct(rs.roas.actual, 0)} · 전환율 ${rs.cvr.actual == null ? '-' : U.pct(rs.cvr.actual, 2)}</div>
+          <div class="s">${MD.ratioTag(rs.roas)} ${MD.ratioTag(rs.cvr)} · <a href="#goals" data-gt="ad">광고 목표 탭에서 보기</a></div></div>
+      </div>` : `
+      <div class="note" style="margin-top:0">매출 목표 달성률 ${pctOr(st.achieve)} (실적 ${U.krw(st.actual)}원 / 월 목표 ${st.target == null ? '미설정' : U.krw(st.target) + '원'}) · <a href="#goals" data-gt="md">MD 목표 탭에서 보기</a></div>
+      <div class="kpis kpis-3">
         <div class="kpi"><div class="k">광고 ROAS (광고 매출 ÷ 광고비)</div><div class="v">${rs.roas.actual == null ? '-' : U.pct(rs.roas.actual, 0)}</div>
           <div class="s">${MD.ratioTag(rs.roas)} ${rs.roas.target != null ? `목표 ${U.pct(rs.roas.target, 0)}${rs.roas.diff != null ? ` · ${MD.ratioText(rs.roas, 'roas').split(' · ')[1]}` : ''}` : ''}</div>
           <div class="s" style="margin-top:2px">${U.esc(rs.roas.scope || '')} · 플랫폼 광고 리포트 기준 · <a href="#ads">광고 성과</a></div></div>
         <div class="kpi"><div class="k">전환율 (주문 건수 ÷ 방문)</div><div class="v">${rs.cvr.actual == null ? '-' : U.pct(rs.cvr.actual, 2)}</div>
           <div class="s">${MD.ratioTag(rs.cvr)} ${rs.cvr.target != null ? `목표 ${U.pct(rs.cvr.target, 2)}${rs.cvr.diff != null ? ` · ${MD.ratioText(rs.cvr, 'cvr').split(' · ')[1]}` : ''}` : ''}</div>
           <div class="s" style="margin-top:2px">${U.esc(rs.cvr.scope || '')}${rs.final ? ' · 월 최종' : ' · 월 누적'}</div></div>
-        <div class="kpi"><div class="k">이익률 목표</div><div class="v">${pctOr(k.margin)}</div><div class="s">${k.marginTarget == null ? '목표 미설정' : k.noCostHold ? `목표 ${U.pct(k.marginTarget)} · <span class="tag warn">판정 보류: 원가 미입력 매출 ${U.krw(k.noCost)}원</span>` : `목표 ${U.pct(k.marginTarget)} · ${k.margin == null ? '' : `${k.margin - k.marginTarget >= 0 ? '+' : ''}${((k.margin - k.marginTarget) * 100).toFixed(1)}%p`}${k.noCost ? ` · 원가 미입력 매출 ${U.krw(k.noCost)}원 포함` : ''}`}</div></div>
-        <div class="kpi"><div class="k">광고비 예산 사용</div><div class="v">${pctOr(k.usage)}</div><div class="s">${k.budget == null ? '예산 미설정' : `${U.krw(k.spent)}원(${k.spentSrc}) / 예산 ${U.krw(k.budget)}원 · 경과율 ${U.pct(k.elapsedShare, 0)}`}${k.budget === 0 && k.spent > 0 ? ' · <span class="tag bad">예산 0인데 지출</span>' : k.usage != null && k.usage > k.elapsedShare + 0.05 ? ' · <span class="tag warn">경과율보다 빨리 쓰는 중</span>' : ''}</div></div>
-      </div>
-      ${rs.roas.tone === 'hold' || rs.cvr.tone === 'hold' ? `<div class="note">판정 보류 사유 — ${[rs.roas.tone === 'hold' ? `ROAS: ${U.esc(rs.roas.why)}` : '', rs.cvr.tone === 'hold' ? `전환율: ${U.esc(rs.cvr.why)}` : ''].filter(Boolean).join(' / ')}</div>` : ''}
-      ${st.unset || orphanSales.length ? `<div class="note">${st.unset ? `목표 미설정 채널 ${st.unset}개는 월 목표 합계에서 빠졌습니다. ` : ''}${orphanSales.length ? `채널 목록에 없는 채널의 실적 ${orphanSales.map(([c, rs]) => `${U.esc(c)} ${U.krw(rs.reduce((a, r) => a + r.sales, 0))}원`).join(', ')}은 전체 실적에는 들어가지만 목표가 없습니다.` : ''}</div>` : ''}
+        ${budgetKpi}
+      </div>`}
+      ${T === 'ad' && (rs.roas.tone === 'hold' || rs.cvr.tone === 'hold') ? `<div class="note">판정 보류 사유 — ${[rs.roas.tone === 'hold' ? `ROAS: ${U.esc(rs.roas.why)}` : '', rs.cvr.tone === 'hold' ? `전환율: ${U.esc(rs.cvr.why)}` : ''].filter(Boolean).join(' / ')}</div>` : ''}
+      ${T === 'md' && (st.unset || orphanSales.length) ? `<div class="note">${st.unset ? `목표 미설정 채널 ${st.unset}개는 월 목표 합계에서 빠졌습니다. ` : ''}${orphanSales.length ? `채널 목록에 없는 채널의 실적 ${orphanSales.map(([c, rs]) => `${U.esc(c)} ${U.krw(rs.reduce((a, r) => a + r.sales, 0))}원`).join(', ')}은 전체 실적에는 들어가지만 목표가 없습니다.` : ''}</div>` : ''}
 
-      <div class="grid g3" style="margin-top:16px">
+      ${T === 'md' ? `<div class="grid g3" style="margin-top:16px">
         <div class="card span2"><div class="card-head"><h2>누적 실적 vs 누적 계획</h2><span class="muted">일수 균등 배분</span></div>
           ${MD.legend([{ label: '누적 계획', color: 'var(--compare)', dashed: true }, { label: '누적 실적', color: MD.colorOf(0) }, { label: '월말 예상 (참고)', color: MD.colorOf(1), dashed: true }])}
           <div class="chart-box"><canvas id="gBurn"></canvas></div></div>
@@ -281,18 +299,18 @@
       </div>
 
       <div class="card"><div class="card-head"><h2>채널별 달성 현황</h2><span class="muted">기준일까지 부족액이 큰 순</span></div><div id="gCh"></div>
-        <div class="note">부족액 = 기준일까지 계획 − 누적 실적. 비율보다 금액 영향이 큰 채널부터 보세요. 매출 미달을 곧바로 광고 확대로 잇지 말고 이익률·광고비·품절·행사를 함께 확인하세요.</div></div>
+        <div class="note">부족액 = 기준일까지 계획 − 누적 실적. 비율보다 금액 영향이 큰 채널부터 보세요. 매출 미달을 곧바로 광고 확대로 잇지 말고 이익률·광고비·품절·행사를 함께 확인하세요.</div></div>` : `
 
-      <div class="card"><div class="card-head"><h2>채널별 광고 ROAS·전환율</h2><span class="muted">${rs.final ? '월 최종' : `${month.slice(5)}/1 ~ ${(rs.upto || '').slice(5).replace('-', '/')} 누적`} · 채널 목표가 없으면 전사 목표로 판정하지 않음</span></div><div id="gRatio"></div>
-        <div class="note">광고 ROAS = 광고 리포트의 광고 매출 ÷ 광고비. 전환율 = 유입 파일의 주문 건수 ÷ 방문수. 판매 파일의 주문수는 상품 행마다 세어 한 주문이 여러 번 셀 수 있어 '참고'로만 보여 줍니다. 판정은 [데이터 관리 → 자료 마감 확인]의 확인일까지 자료가 있을 때만 합니다.</div></div>
+      <div class="card" style="margin-top:16px"><div class="card-head"><h2>채널별 광고 ROAS·전환율</h2><span class="muted">${rs.final ? '월 최종' : `${month.slice(5)}/1 ~ ${(rs.upto || '').slice(5).replace('-', '/')} 누적`} · 채널 목표가 없으면 전사 목표로 판정하지 않음</span></div><div id="gRatio"></div>
+        <div class="note">광고 ROAS = 광고 리포트의 광고 매출 ÷ 광고비. 전환율 = 유입 파일의 주문 건수 ÷ 방문수. 판매 파일의 주문수는 상품 행마다 세어 한 주문이 여러 번 셀 수 있어 '참고'로만 보여 줍니다. 판정은 [데이터 관리 → 자료 마감 확인]의 확인일까지 자료가 있을 때만 합니다.</div></div>`}
 
       <div class="card" id="gInput">
-        <div class="card-head"><h2>목표 입력</h2>
+        <div class="card-head"><h2>${T === 'md' ? 'MD 목표 입력 (매출·이익률)' : '광고 목표 입력 (ROAS·전환율·광고비 예산)'}</h2>
           <div class="seg"><button data-w="0" class="${!wide ? 'on' : ''}">분기</button><button data-w="1" class="${wide ? 'on' : ''}">1년</button></div>
           <select id="gYear">${[...new Set([Number(asOf.slice(0, 4)) - 1, Number(asOf.slice(0, 4)), Number(asOf.slice(0, 4)) + 1, Number(year)])].sort().map((y) => `<option ${String(y) === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
         </div>
         <div id="gGrid"></div>
-        <div class="row" style="margin-top:12px">
+        ${T === 'md' ? `<div class="row" style="margin-top:12px">
           <label>전년 같은 달 실적 × (1 + <input type="number" id="gGrow" value="10" style="width:70px">%)</label><button class="btn small" id="gFillLY">보이는 달의 빈 칸 채우기</button>
           <span class="spacer"></span>
           <label><select id="gSrc"></select> 값을</label><button class="btn small" id="gCopy">이후 달 빈 칸에 복사</button>
@@ -302,14 +320,17 @@
           <button class="btn small" id="gFreeze">지난 달까지 기본값을 월 목표로 고정</button>
           <span class="muted" style="font-size:12px">채널 기본 월 목표(데이터 관리)를 바꾸면 월 목표를 입력하지 않은 지난 달의 달성률도 바뀝니다. 바꾸기 전에 고정하세요.</span>
         </div>
-        <div class="note">매출 목표는 VAT 포함 실결제액 기준(판매 자료와 같은 기준)입니다. 빈 칸은 회색 글씨의 채널 기본 월 목표를 씁니다. 전사 매출 목표는 채널 목표의 합입니다. 이익률 목표는 (순매출 − 수수료 − 원가) ÷ 순매출, 광고비 예산은 광고 리포트 금액 기준입니다.</div>
+        <div class="note">매출 목표는 VAT 포함 실결제액 기준(판매 자료와 같은 기준)입니다. 빈 칸은 회색 글씨의 채널 기본 월 목표를 씁니다. 전사 매출 목표는 채널 목표의 합입니다. 이익률 목표는 (순매출 − 수수료 − 원가) ÷ 순매출입니다. 광고 목표는 '광고 목표' 탭에서 입력합니다(같은 목표 자료에 저장).</div>` : `
+        <div class="note">광고 ROAS는 광고 리포트의 광고 매출 ÷ 광고비, 전환율은 유입 파일의 플랫폼 주문 ÷ 방문, 광고비 예산은 광고 리포트 금액 기준입니다. 매출·이익률 목표는 'MD 목표' 탭에서 입력합니다(같은 목표 자료에 저장).</div>`}
       </div>
       ${orphanTargets.length ? `<div class="card"><div class="card-head"><h2>연결이 끊긴 목표</h2><span class="muted">채널 이름을 바꾸거나 지워서 채널 목록에 없는 목표</span></div><div id="gOrphan"></div></div>` : ''}`;
 
     el.querySelector('#gToInput').onclick = () => el.querySelector('#gInput').scrollIntoView({ behavior: 'smooth' });
+    el.querySelectorAll('[data-gt]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); tab = b.dataset.gt; MD.rerender(); }));
     el.querySelector('#gPrev').onclick = () => { month = addMonth(month, -1); MD.rerender(); };
     el.querySelector('#gNext').onclick = () => { month = addMonth(month, 1); MD.rerender(); };
 
+    if (T === 'md') {
     // 번업 차트
     const days = U.dateRange(monthStart(month), monthEnd(month));
     const chs = d.channels.map((c) => c.name);
@@ -353,7 +374,7 @@
       rows: chRows, total: { name: '합계', ...st, sources: [{ source: 'month' }] }, sortKey: 'gap', exportName: `채널별목표달성_${month}`,
     });
     el.querySelector('#gCh').addEventListener('click', (e) => { const a = e.target.closest('a[data-ch]'); if (a) { e.preventDefault(); MD.focusChannel(a.dataset.ch); } });
-
+    } else {
     MD.table(el.querySelector('#gRatio'), {
       cols: [
         { key: 'name', label: '채널', html: true, fmt: (v) => `<a href="#channels" data-ch="${U.esc(v)}">${U.esc(v)}</a>`, xfmt: (v) => v },
@@ -369,6 +390,7 @@
       rows: rRows, sortKey: 'spend', exportName: `채널별ROAS전환율_${month}`,
     });
     el.querySelector('#gRatio').addEventListener('click', (e) => { const a = e.target.closest('a[data-ch]'); if (a) { e.preventDefault(); MD.focusChannel(a.dataset.ch); } });
+    }
 
     // 목표 입력표
     const q = Math.floor((Number(month.slice(5)) - 1) / 3);
@@ -384,36 +406,39 @@
     const chSet = d.channels.reduce((a, c) => a + months.reduce((b, m) => { const t = C.targetRow(c.name, m) || {}; return b + (t.roas != null) + (t.cvr != null); }, 0), 0);
     const tot = (m) => d.channels.reduce((a, c) => a + (C.targetInfo(c.name, m).amount || 0), 0);
     const co = (m) => C.targetRow('', m) || {};
-    el.querySelector('#gGrid').innerHTML = `<div class="table-wrap"><table class="goal-grid">
+    const memoRow = `<tr><td>목표 근거 메모</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}"><input type="text" data-m="${m}" data-c="" data-f="memo" value="${U.esc(co(m).memo || '')}" placeholder="예: 전년 +10%, 행사 반영" title="${co(m).updatedAt ? '마지막 수정 ' + co(m).updatedAt.slice(0, 16).replace('T', ' ') : ''}" aria-label="${label(m)} 목표 근거 메모"></td>`).join('')}</tr>`;
+    el.querySelector('#gGrid').innerHTML = T === 'ad' ? `<div class="table-wrap"><table class="goal-grid">
+      <thead><tr><th>전사 광고 목표</th>${months.map((m) => `<th class="num ${m === cur ? 'cur' : ''}">${label(m)}${m === cur ? ' · 이번 달' : ''}</th>`).join('')}</tr></thead>
+      <tbody>
+        <tr><td title="광고 리포트가 있는 채널 합계의 광고 매출 ÷ 광고비">광고 ROAS 목표 (%, 전사)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, '', 'roas')}</td>`).join('')}</tr>
+        <tr><td>전환율 목표 (%, 전사)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, '', 'cvr')}</td>`).join('')}</tr>
+        <tr><td>광고비 예산 (원)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}"><input type="text" inputmode="numeric" class="num" data-m="${m}" data-c="" data-f="adBudget" value="${co(m).adBudget != null ? U.num(co(m).adBudget) : ''}" placeholder="미설정" aria-label="${label(m)} 광고비 예산"></td>`).join('')}</tr>
+        ${memoRow}
+      </tbody></table></div>
+      <h3 style="margin:14px 0 6px;font-size:14px">채널별 ROAS·전환율 목표 <span class="muted" style="font-weight:400">(설정 ${chSet}/${d.channels.length * months.length * 2}칸)</span></h3>
+      <div class="table-wrap"><table class="goal-grid"><thead><tr><th>채널 · 지표 (%)</th>${months.map((m) => `<th class="num ${m === cur ? 'cur' : ''}">${label(m)}</th>`).join('')}</tr></thead>
+        <tbody>${d.channels.map((c) => [['roas', 'ROAS'], ['cvr', '전환율']].map(([f, nm]) => `<tr><td>${U.esc(c.name)} · ${nm}</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, c.name, f)}</td>`).join('')}</tr>`).join('')).join('')}</tbody></table></div>
+      <div class="note">%로 입력합니다: ROAS 500은 500%, 전환율 3은 3%. 채널 칸이 비어 있으면 그 채널은 '목표 미설정'으로 두고 전사 목표를 대신 쓰지 않습니다.</div>` : `<div class="table-wrap"><table class="goal-grid">
       <thead><tr><th>채널 (매출 목표, 원)</th>${months.map((m) => `<th class="num ${m === cur ? 'cur' : ''}">${label(m)}${m === cur ? ' · 이번 달' : ''}</th>`).join('')}</tr></thead>
       <tbody>${d.channels.map((c) => `<tr><td>${U.esc(c.name)}</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${cellIn(m, c.name)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${months.length + 1}" class="muted">채널이 없습니다. 데이터 관리에서 채널을 먼저 등록하세요.</td></tr>`}</tbody>
       <tfoot>
         <tr class="total"><td>전사 매출 목표 (합계)</td>${months.map((m) => `<td class="num ${m === cur ? 'cur' : ''}" title="${U.won(tot(m))}">${U.krw(tot(m))}</td>`).join('')}</tr>
         <tr><td>이익률 목표 (%)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}"><input type="number" min="0" max="100" step="0.5" data-m="${m}" data-c="" data-f="margin" value="${co(m).margin != null ? Math.round(co(m).margin * 1000) / 10 : ''}" placeholder="미설정" aria-label="${label(m)} 이익률 목표"></td>`).join('')}</tr>
-        <tr><td title="광고 리포트가 있는 채널 합계의 광고 매출 ÷ 광고비">광고 ROAS 목표 (%, 전사)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, '', 'roas')}</td>`).join('')}</tr>
-        <tr><td>전환율 목표 (%, 전사)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, '', 'cvr')}</td>`).join('')}</tr>
-        <tr><td>광고비 예산 (원)</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}"><input type="text" inputmode="numeric" class="num" data-m="${m}" data-c="" data-f="adBudget" value="${co(m).adBudget != null ? U.num(co(m).adBudget) : ''}" placeholder="미설정" aria-label="${label(m)} 광고비 예산"></td>`).join('')}</tr>
-        <tr><td>목표 근거 메모</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}"><input type="text" data-m="${m}" data-c="" data-f="memo" value="${U.esc(co(m).memo || '')}" placeholder="예: 전년 +10%, 행사 반영" title="${co(m).updatedAt ? '마지막 수정 ' + co(m).updatedAt.slice(0, 16).replace('T', ' ') : ''}" aria-label="${label(m)} 목표 근거 메모"></td>`).join('')}</tr>
-      </tfoot></table></div>
-      <details style="margin-top:10px" ${openCh ? 'open' : ''} id="gChDet"><summary>채널별 ROAS·전환율 목표 (설정 ${chSet}/${d.channels.length * months.length * 2}칸)</summary>
-        <div class="table-wrap" style="margin-top:8px"><table class="goal-grid"><thead><tr><th>채널 · 지표 (%)</th>${months.map((m) => `<th class="num ${m === cur ? 'cur' : ''}">${label(m)}</th>`).join('')}</tr></thead>
-        <tbody>${d.channels.map((c) => [['roas', 'ROAS'], ['cvr', '전환율']].map(([f, nm]) => `<tr><td>${U.esc(c.name)} · ${nm}</td>${months.map((m) => `<td class="${m === cur ? 'cur' : ''}">${pctIn(m, c.name, f)}</td>`).join('')}</tr>`).join('')).join('')}</tbody></table></div>
-        <div class="note">%로 입력합니다: ROAS 500은 500%, 전환율 3은 3%. 채널 칸이 비어 있으면 그 채널은 '목표 미설정'으로 두고 전사 목표를 대신 쓰지 않습니다.</div>
-      </details>`;
-    el.querySelector('#gChDet').ontoggle = (e) => { openCh = e.target.open; };
+        ${memoRow}
+      </tfoot></table></div>`;
     el.querySelectorAll('#gGrid input').forEach((inp) => (inp.onchange = () => {
       const f = inp.dataset.f, raw = inp.value.trim(), isPct = f === 'margin' || f === 'roas' || f === 'cvr';
       let v = raw === '' ? null : f === 'memo' ? raw : isPct ? Number(raw.replace('%', '')) : parseWon(raw);
       if (v != null && isPct && (!Number.isFinite(v) || v < 0 || ((f === 'roas' || f === 'cvr') && v === 0))) { U.toast(f === 'margin' ? '0 이상의 %를 입력하세요.' : '0보다 큰 %를 입력하세요. 예: ROAS 500, 전환율 3', 'bad'); inp.value = ''; return; }
       if (v != null && !isPct && f !== 'memo' && (!Number.isFinite(v) || v < 0)) { U.toast('0 이상의 금액을 입력하세요. 예: 62,000,000 · 6200만 · 1.2억', 'bad'); inp.value = ''; return; }
       if (isPct && v != null) v = v / 100;
-      if (inp.closest('#gChDet')) openCh = true; // 채널별 목표를 고치는 중이면 다시 그려도 펼친 채로
       const before = d.targets.map((t) => ({ ...t })); // 실패하면 되돌릴 이전 목표 (개선 3단계)
       C.setTarget(inp.dataset.m, inp.dataset.c, f, v);
       MD.store.saveP(['targets']).then((ok) => { if (!ok) d.targets = before; const y = window.scrollY; MD.rerender(); window.scrollTo(0, y); });
     }));
     el.querySelectorAll('[data-w]').forEach((b) => (b.onclick = () => { wide = b.dataset.w === '1'; MD.rerender(); }));
     el.querySelector('#gYear').onchange = (e) => { year = e.target.value; if (month.slice(0, 4) !== year) month = `${year}-${month.slice(5)}`; MD.rerender(); };
+    if (T === 'md') {
     const src = el.querySelector('#gSrc');
     src.innerHTML = months.map((m) => `<option value="${m}" ${m === (months.includes(cur) ? cur : months[0]) ? 'selected' : ''}>${label(m)}</option>`).join('');
 
@@ -460,6 +485,7 @@
       }
       apply(out, '기본값 고정');
     };
+    }
 
     if (orphanTargets.length) {
       const box = el.querySelector('#gOrphan');

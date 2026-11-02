@@ -120,8 +120,8 @@
     el.querySelector('#adChT').addEventListener('click', (e) => { const x = e.target.closest('a[data-ch]'); if (x) { e.preventDefault(); MD.focusChannel(x.dataset.ch); } });
     let cpRows = [];
     if (avail.campaign) {
-      const pp = prevBy((r) => r.channel + '|' + (r.campaign || '(캠페인 없음)'));
-      cpRows = [...group(cur, (r) => r.channel + '|' + (r.campaign || '(캠페인 없음)')).entries()].map(([k, rs]) => { const z = metrics(rs), p = pp.get(k); const [ch, cp] = k.split('|'); return { name: cp, channel: ch, ...z, dRoas: z.roas != null && p && p.roas != null ? z.roas - p.roas : null }; });
+      const pp = prevBy((r) => JSON.stringify([r.channel, r.campaign || '(캠페인 없음)']));
+      cpRows = [...group(cur, (r) => JSON.stringify([r.channel, r.campaign || '(캠페인 없음)'])).entries()].map(([k, rs]) => { const z = metrics(rs), p = pp.get(k); const [ch, cp] = JSON.parse(k); return { name: cp, channel: ch, ...z, dRoas: z.roas != null && p && p.roas != null ? z.roas - p.roas : null }; });
       MD.table(el.querySelector('#adCpT'), {
         cols: [{ key: 'channel', label: '채널' }, ...cols({ key: 'name', label: '캠페인' })],
         rows: cpRows, sortKey: 'spend', exportName: `광고성과_캠페인_${st.start}_${st.end}`, maxRows: 100,

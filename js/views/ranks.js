@@ -5,7 +5,7 @@
   const TYPES = ['자연', '광고'];
   const DEVICES = ['모바일', 'PC'];
   const uid = () => 'RK' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const keyOf = (r) => [r.platform, r.keyword, r.sku || '', r.type].join('|');
+  const keyOf = (r) => JSON.stringify([r.platform, r.keyword, r.sku || '', r.type]);
   const nowLocal = () => { const t = new Date(); t.setMinutes(t.getMinutes() - t.getTimezoneOffset()); return t.toISOString().slice(0, 16); };
   const rankText = (r) => (r.rank != null ? `${r.rank}위` : `범위 밖(${r.scopeN || '?'}위 밖)`);
 
@@ -147,8 +147,8 @@
       const f = e.target.files[0]; e.target.value = ''; if (!f) return;
       let parsed;
       try { const sheets = await U.readGrid(f); parsed = parseRankRows(sheets[0].grid); } catch (err) { U.toast('순위 파일 읽기 실패: ' + err.message, 'bad'); return; }
-      const seen = new Set(d.ranks.map((r) => [r.at, r.platform, r.keyword, r.sku || '', r.type, r.device].join('|')));
-      const add = parsed.rows.filter((r) => { const k = [r.at, r.platform, r.keyword, r.sku || '', r.type, r.device].join('|'); if (seen.has(k)) return false; seen.add(k); return true; }).map((r) => ({ id: uid(), ...r }));
+      const seen = new Set(d.ranks.map((r) => JSON.stringify([r.at, r.platform, r.keyword, r.sku || '', r.type, r.device])));
+      const add = parsed.rows.filter((r) => { const k = JSON.stringify([r.at, r.platform, r.keyword, r.sku || '', r.type, r.device]); if (seen.has(k)) return false; seen.add(k); return true; }).map((r) => ({ id: uid(), ...r }));
       const badN = Object.values(parsed.bad).reduce((a, b) => a + b, 0), dup = parsed.rows.length - add.length;
       if (!add.length) { U.toast(`올릴 새 관측이 없습니다${badN ? ` (제외 ${badN}행: ${Object.entries(parsed.bad).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}${dup ? ` · 이미 있는 관측 ${dup}건` : ''}.`, 'bad'); return; }
       d.ranks.push(...add);

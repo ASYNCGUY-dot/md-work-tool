@@ -9,7 +9,7 @@
 
   // 기간 안 조사 자료를 경쟁 상품별로 정리 (첫·마지막 조사값)
   function rivals(rows) {
-    const g = U.groupBy(rows, (r) => [r.sku, r.rival, r.channel || ''].join('|'));
+    const g = U.groupBy(rows, (r) => JSON.stringify([r.sku, r.rival, r.channel || '']));
     return [...g.values()].map((rs) => {
       rs = [...rs].sort((a, b) => (a.date < b.date ? -1 : 1));
       const f = rs[0], l = rs[rs.length - 1];
@@ -24,16 +24,16 @@
     const d = MD.data;
     const ok = (r) => Number(r.price) > 0; // 0원 조사가는 격차 계산 불가 — 업로드에서도 거부
     const cur = C.inRange(d.compete, s, e).filter(ok), prev = C.inRange(d.compete, cs, ce).filter(ok);
-    const rv = rivals(cur), rvPrev = new Map(rivals(prev).map((r) => [r.sku + '|' + r.rival + '|' + r.channel, r]));
+    const rv = rivals(cur), rvPrev = new Map(rivals(prev).map((r) => [JSON.stringify([r.sku, r.rival, r.channel]), r]));
     const sales = C.by(C.inRange(d.sales, s, e), [], (r) => r.sku), salesP = C.by(C.inRange(d.sales, cs, ce), [], (r) => r.sku);
     const bySku = [...U.groupBy(rv, (r) => r.sku).entries()].map(([sku, rs]) => {
       const p = d.productMap[sku] || {}, a = sales.get(sku), b = salesP.get(sku);
       const ourList = rs.find((r) => r.ourPrice != null)?.ourPrice ?? (Number(p.price) || null);
       const minR = Math.min(...rs.map((r) => r.price)), avgR = rs.reduce((x, r) => x + r.price, 0) / rs.length;
       // 경쟁가 인하: 기간 안 첫 조사 대비 또는 비교 기간 마지막 조사 대비 중 더 크게 내린 쪽 (기간 시작 전에 내린 경우도 잡는다)
-      const chg = (r) => { const q = rvPrev.get(r.sku + '|' + r.rival + '|' + r.channel); const vp = q && q.price ? r.price / q.price - 1 : null; return [r.dPrice, vp].filter((x) => x != null); };
+      const chg = (r) => { const q = rvPrev.get(JSON.stringify([r.sku, r.rival, r.channel])); const vp = q && q.price ? r.price / q.price - 1 : null; return [r.dPrice, vp].filter((x) => x != null); };
       const cut = rs.filter((r) => chg(r).some((x) => x <= -0.05));
-      const vsPrev = rs.map((r) => { const q = rvPrev.get(r.sku + '|' + r.rival + '|' + r.channel); return q ? r.price / q.price - 1 : null; }).filter((x) => x != null);
+      const vsPrev = rs.map((r) => { const q = rvPrev.get(JSON.stringify([r.sku, r.rival, r.channel])); return q ? r.price / q.price - 1 : null; }).filter((x) => x != null);
       return {
         sku, name: p.name || `${sku} (미등록)`, rivals: rs.length, ourPrice: ourList, minRival: minR, avgRival: avgR,
         gap: ourList ? ourList / minR - 1 : null, asp: a && a.qty ? a.sales / a.qty : null,
