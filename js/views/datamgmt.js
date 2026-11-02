@@ -1,6 +1,10 @@
 // 데이터 관리: 양식 내려받기, 업로드(추가/교체), 채널·상품 마스터 편집, 백업·복원, 기준값
 (function () {
   const U = MD.util;
+  // 업무 자료 종류 등록표(data.js). 불러올 때 있으면 잡아 두고(저장 장치를 바꿔 끼우는 테스트 환경 대비), 없으면 처음 쓸 때 읽는다
+  let dsCache = MD.store && MD.store.DATASETS;
+  const datasets = () => dsCache || (dsCache = MD.store && MD.store.DATASETS) || [];
+  const emptyOf = (ds) => (ds.shape === 'map' ? {} : []);
 
   const SPECS = {
     sales: {
@@ -79,6 +83,7 @@
           if (spec === SPECS.compete && (k === 'price' || k === 'ourPrice') && !(v > 0)) return reject(`${spec.cols[k][0]} 0원`); // 0원 조사가는 가격 격차를 계산할 수 없다
           // 수수료: '12%'·'0.5%'처럼 %가 붙었거나 1보다 크면(12) 백분율, 아니면(0.12) 비율로 본다
           if (k === 'fee' && (raw.includes('%') || v > 1)) v = v / 100;
+          if (k === 'fee' && !(v >= 0 && v < 1)) return reject('수수료율 범위 밖(0 이상 100% 미만)'); // 음수면 수수료가 이익에 더해진다 (Codex 개선 6단계 R1-01)
           o[k] = v;
         } else if (k === 'date') {
           const v = U.normDate(raw);
@@ -187,11 +192,15 @@
     // 빈 칸은 기존 값을 유지하고, 새 항목이면 0·빈 문자열로 시작한다
     const base = kind === 'products' ? { name: '', brand: '', category: '미분류', season: '', price: 0, cost: 0, stock: 0 } : { type: '', fee: 0, target: 0 };
     // 같은 키가 파일에 여러 번 있으면 교체·추가 모두 뒤 행으로 합친다 — 교체에서 중복이 남으면 채널 목표가 두 번 더해진다 (Codex 기능 K R1-02)
+    const before = new Map(D[kind].map((r) => [r[key], r])), field = kind === 'products' ? 'cost' : 'fee';
     const m = new Map(mode === 'replace' ? [] : D[kind].map((r) => [r[key], r]));
     rows.forEach((r) => m.set(r[key], { ...base, ...(m.get(r[key]) || {}), ...r }));
     D[kind] = [...m.values()];
+    // 기존 상품·채널의 원가·수수료가 바뀌었으면 기록 (개선 7단계)
+    let changedN = 0;
+    for (const r of D[kind]) { const o = before.get(r[key]); if (o && o[field] !== r[field] && MD.calc.logChange(field, r[key], o[field], r[field])) changedN++; }
     MD.store.save();
-    return '';
+    return changedN ? ` 기존 ${kind === 'products' ? '상품 원가' : '채널 수수료율'} ${changedN}건이 바뀌었습니다 — 과거 기간 이익도 바뀐 값으로 다시 계산됩니다(변경 기록은 보고서 '계산 기준'에 표시).` : '';
   }
 
   // ---------- 가져오기 전 확인 (로드맵 1순위, Codex 합의 2026-10-31) ----------
@@ -254,8 +263,21 @@
       chs, newCh: chs.filter((c) => !chNames.has(c)), skus, newSku: skus.filter((s) => !skuSet.has(s)),
       sums: (SUMS[kind] || []).map((f) => ({ f, label: SUM_LABEL[f], v: rows.reduce((a, r) => a + (r[f] || 0), 0), n: rows.filter((r) => r[f] != null).length })).filter((s) => s.n > 0), // 열이 없는 항목은 합계를 보이지 않음
       keyLabel, distinct: keys.size, merged: rows.length - keys.size,
+      shrink: mode === 'merge' ? shrinkOf(kind, rows, existing, keyOf) : null,
       effect: mode === 'replace' ? `기존 ${U.num(existing.length)}행을 지우고 ${U.num(keys.size)}건으로 교체` : `같은 ${keyLabel} 기준: 기존 ${U.num(overwrite)}건을 새 값으로 바꾸고 ${U.num(keys.size - overwrite)}건을 새로 추가`,
     };
+  }
+  // 추가·갱신에서 같은 키의 기존 값보다 새 파일 합계가 작아지는 건수·금액 (부분 파일 재업로드 실수 예방, Codex 개선 논의 2026-11-01)
+  const SHRINK_F = { sales: ['sales', '매출'], traffic: ['visits', '방문'], ads: ['spend', '광고비'] };
+  function shrinkOf(kind, rows, existing, keyOf) {
+    const sf = SHRINK_F[kind];
+    if (!sf || !existing.length) return null;
+    const [f, label] = sf, now = new Map(), old = new Map();
+    for (const r of rows) now.set(keyOf(r), (now.get(keyOf(r)) || 0) + (Number(r[f]) || 0));
+    for (const r of existing) old.set(keyOf(r), (old.get(keyOf(r)) || 0) + (Number(r[f]) || 0));
+    let n = 0, amt = 0;
+    for (const [k, v] of now) if (old.has(k) && old.get(k) > v) { n++; amt += old.get(k) - v; }
+    return { f, label, n, amt };
   }
   function statsHtml(kind, st, res) {
     const fmt = (s) => (MONEY.includes(s.f) ? U.won(s.v) : U.num(s.v)) + (s.n < res.rows.length ? ` <span class="muted" style="font-size:11px">(${U.num(s.n)}행만 값 있음)</span>` : '');
@@ -268,6 +290,7 @@
         ${st.sums.map((s) => `<div><div class="k">${s.label}</div><div class="v" style="font-size:15px">${fmt(s)}</div></div>`).join('')}
       </div>
       <div class="note" style="margin:0">${st.effect}.${st.merged ? ` 파일 안에서 같은 ${st.keyLabel} 행 ${U.num(st.merged)}개는 합산(경쟁·마스터는 마지막 행)합니다.` : ''}
+        ${st.shrink && st.shrink.n ? `<br><b style="color:var(--warn)">기존보다 ${st.shrink.label}이 줄어드는 ${st.keyLabel} ${U.num(st.shrink.n)}건(합계 −${MONEY.includes(st.shrink.f) ? U.won(st.shrink.amt) : U.num(st.shrink.amt)})</b> — 같은 키의 기존 값은 더하지 않고 이 파일의 합계로 바뀝니다. 그날 주문의 일부만 담은 파일이면 기존 합계가 빠지니, 하루 전체가 들어 있는 파일인지 확인하세요.` : ''}
         ${st.newCh.length ? `<br>새 채널: ${list(st.newCh)}${kind === 'sales' || kind === 'traffic' ? ' — 자동 등록되며 수수료율·목표를 따로 입력해야 합니다.' : kind === 'channels' ? '' : ' — 채널 목록에 없어 채널별 판정에서 빠집니다.'}` : ''}
         ${st.newSku.length ? `<br>새 상품: ${list(st.newSku)}${kind === 'sales' ? ' — 자동 등록되며 원가를 입력해야 이익이 계산됩니다.' : kind === 'compete' ? ' — 상품 마스터에 없어 우리 실적과 연결되지 않습니다.' : ''}` : ''}</div>
       ${res.bad ? `<div class="note" style="margin:6px 0 0;color:var(--bad)">제외 사유: ${Object.entries(res.reasons).map(([r, n]) => `${U.esc(r)} ${U.num(n)}`).join(', ')} · 예: ${res.samples.slice(0, 5).map((x) => `${x.row}행 ${U.esc(x.why)}`).join(', ')}${res.bad > 5 ? ' …' : ''}</div>` : ''}`;
@@ -308,7 +331,11 @@
       return null;
     },
     compete: (r) => (!okDate(r.date) ? '조사일' : !okText(r.sku) ? 'SKU' : !okText(r.rival) ? '경쟁상품' : !okNum(r.price) ? '경쟁가' : optNum(r, ['ourPrice', 'rank', 'reviews', 'rating']) || null),
-    channels: (r) => { if (!okText(r.name)) return '채널명'; const n = optNum(r, ['fee', 'target']); if (n) return n; fill(r, { fee: 0, target: 0 }); return null; },
+    channels: (r) => {
+      if (!okText(r.name)) return '채널명'; const n = optNum(r, ['fee', 'target']); if (n) return n;
+      fill(r, { fee: 0, target: 0 });
+      return r.fee >= 0 && r.fee < 1 ? null : '수수료율(0 이상 100% 미만)'; // 가져오기·직접 수정과 같은 범위 (Codex 개선 6단계 R2-01)
+    },
     products: (r) => { if (!okText(r.sku)) return 'SKU'; const n = optNum(r, ['price', 'cost', 'stock']); if (n) return n; fill(r, { price: 0, cost: 0, stock: 0, name: (x) => x.sku }); return null; },
     targets: (r) => (typeof r.month !== 'string' || !/^\d{4}-\d{2}$/.test(r.month) ? '월' : optNum(r, ['sales', 'roas', 'cvr', 'adBudget', 'margin']) || null),
     promotions: (r) => {
@@ -322,7 +349,7 @@
     pos: (r) => (!okText(r.sku) ? 'SKU' : !okNum(r.qty) ? '수량' : !okDateOrEmpty(r.ordered) ? '발주일' : !okDateOrEmpty(r.eta) ? '입고 예정일' : optNum(r, ['received']) || (fill(r, { received: 0 }), null)),
     vendors: (r) => (!okText(r.name) ? '거래처명' : !okDateOrEmpty(r.last) ? '최근 접촉일' : !okDateOrEmpty(r.due) ? '다음 기한' : !okDateOrEmpty(r.contractEnd) ? '계약 종료일'
       // 계약·이력(로드맵 5순위): 목록·각 행 객체·날짜·숫자·문자열 형식
-      : r.contracts != null && (!Array.isArray(r.contracts) || r.contracts.some((c) => !isObj(c) || !okDateOrEmpty(c.start) || !okDateOrEmpty(c.end) || optNum(c, ['royalty', 'minimum', 'noticeDays']) || ['kind', 'title', 'territory', 'terms', 'renewal', 'status', 'link'].some((k) => c[k] != null && typeof c[k] !== 'string'))) ? '계약'
+      : r.contracts != null && (!Array.isArray(r.contracts) || r.contracts.some((c) => !isObj(c) || !okDateOrEmpty(c.start) || !okDateOrEmpty(c.end) || optNum(c, ['royalty', 'minimum', 'noticeDays']) || (c.noticeDays != null && c.noticeDays !== '' && !(Number.isInteger(c.noticeDays) && c.noticeDays >= 0 && c.noticeDays <= 3650)) || ['kind', 'title', 'territory', 'terms', 'renewal', 'status', 'link'].some((k) => c[k] != null && typeof c[k] !== 'string'))) ? '계약'
       : r.history != null && (!Array.isArray(r.history) || r.history.some((h) => !isObj(h) || !okDate(h.date) || typeof h.text !== 'string' || (h.kind != null && typeof h.kind !== 'string'))) ? '이력' : null),
     candidates: (r) => (!okText(r.name) ? '후보명' : optNum(r, ['popularity', 'lastYearQty', 'outlook', 'margin', 'moq']) || null),
     events: (r) => (!okDate(r.date) ? '날짜' : !okDateOrEmpty(r.end) ? '종료일' : !okText(r.title) ? '내용' : (fill(r, { end: (x) => x.date }), null)),
@@ -337,12 +364,14 @@
         : !['자연', '광고'].includes(r.type) ? '구분' : !(Number.isInteger(r.scopeN) && r.scopeN >= 1) ? '관측 범위' : r.rank != null && !(Number.isInteger(r.rank) && r.rank >= 1 && r.rank <= r.scopeN) ? '순위'
         : ['sku', 'device', 'memo', 'date'].some((k) => r[k] != null && typeof r[k] !== 'string') ? '글자 칸' : (fill(r, { date: (x) => x.at.slice(0, 10) }), null);
     },
+    changes: (r) => (typeof r.at !== 'string' || isNaN(Date.parse(r.at)) ? '시각' : !['cost', 'fee'].includes(r.kind) ? '종류' : !okText(r.key) ? '대상' : !okNum(r.new) ? '새 값' : r.old != null && !okNum(r.old) ? '이전 값' : null),
     reports: (r) => (!okText(r.id) ? 'id' : !okText(r.at) ? '저장 시각' : !okDate(r.start) || !okDate(r.end) ? '보고 기간' : typeof r.html !== 'string' ? '본문' : r.notes != null && (!Array.isArray(r.notes) || r.notes.some((n) => !isObj(n) || !okText(n.at) || isNaN(Date.parse(n.at)) || !okText(n.text))) ? '수정 문구' : null),
   };
   const BACKUP_NUMS = [...NUMS, 'received', 'popularity', 'lastYearQty', 'outlook', 'margin', 'moq', 'roas', 'cvr', 'adBudget', 'budget'];
   function checkBackup(j) {
     const out = [];
-    for (const k of ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'compete', 'events', 'reports', 'checklists', 'ranks']) {
+    // 목록형 자료 전부: 등록표 + 행 규칙이 있는 자료(등록표 없이 불러온 환경에서도 같은 검사)
+    for (const k of new Set([...datasets().filter((x) => x.shape !== 'map').map((x) => x.k), ...Object.keys(ROW_RULES)])) {
       const v = j[k];
       if (v === undefined && k !== 'sales') continue;
       if (!Array.isArray(v)) { out.push(`${k}: 목록 형식 아님`); continue; }
@@ -375,7 +404,7 @@
     if (MD.promoResult) cand.promotions.forEach((p) => MD.promoResult(p));
   }
   // 저장 장치가 쓰는 내부 키 — 백업 부가 설정으로 내보내거나 되살리지 않는다(저장 방식 표식 'backend'를 덮어쓰면 IndexedDB 연결이 끊김, Codex 기능 O R4-01)
-  const INTERNAL = new Set(['meta', 'pending', 'backend']);
+  const INTERNAL = new Set(['meta', 'pending', 'backend', 'lastBackupAt']); // lastBackupAt: 이 브라우저의 마지막 백업 다운로드 요청 시각(백업에 넣으면 복원 때 시각이 틀어짐)
   const headSig = (head) => head.join('|');
   const savedMap = (kind, head) => ((U.store.get('importMaps', {})[kind] || {})[headSig(head)] || {});
   function rememberMap(kind, head, override) {
@@ -390,6 +419,39 @@
     return `<table><thead><tr><th>항목</th><th>기준</th><th>이 기간 자료 상태</th></tr></thead><tbody>${lines.map((l) => `<tr><td>${U.esc(l.item)}</td><td>${U.esc(l.rule)}</td><td class="${l.warn ? '' : 'muted'}" style="${l.warn ? 'color:var(--warn)' : ''}">${U.esc(l.fact || '-')}</td></tr>`).join('')}</tbody></table>`;
   }
   MD.basisTable = basisTable;
+
+  // 예시 데이터 위에서 만든 자료 중 내 데이터로 가져갈 것 고르기 (개선 1단계). choice는 { 키: { new, edited } }로 채운다
+  function carryBox(choice) {
+    const carry = MD.store.sampleCarry();
+    if (!carry.length) return '<div class="note" style="margin-top:0">반영하면 예시 데이터가 비워지고 내 데이터로 바뀝니다(예시에서 만든 자료 없음).</div>';
+    carry.forEach((c) => { if (!choice[c.k]) choice[c.k] = { new: true, edited: c.editedDefault }; });
+    const keptPromo = new Set(carry.filter((c) => c.k === 'promotions').flatMap((c) => [...(choice.promotions.new ? c.newRows : []), ...(choice.promotions.edited ? c.editedRows : [])]).map((p) => p.id));
+    const cl = carry.find((c) => c.k === 'checklists');
+    const broken = cl && choice.checklists.new ? cl.newRows.filter((x) => x.promoId && !keptPromo.has(x.promoId)).length : 0;
+    return `<div class="note" style="margin-top:0;border-left:3px solid var(--accent);padding-left:10px">
+      <b>반영하면 예시 데이터가 비워지고 내 데이터로 바뀝니다.</b> 예시 위에서 만든 자료 중 가져갈 것을 고르세요.
+      <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>자료</th><th>새로 만든 행</th><th>고친 예시 행</th></tr></thead><tbody>
+      ${carry.map((c) => `<tr><td>${c.label}</td>
+        <td>${c.newRows.length ? `<label><input type="checkbox" data-carry="${c.k}" data-part="new" ${choice[c.k].new ? 'checked' : ''}> ${c.newRows.length}건 가져가기</label>` : '-'}</td>
+        <td>${c.editedRows.length ? `<label><input type="checkbox" data-carry="${c.k}" data-part="edited" ${choice[c.k].edited ? 'checked' : ''}> ${c.editedRows.length}건 가져가기</label>` : '-'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="muted" style="font-size:12px">고친 예시 행은 고치지 않은 칸에 예시 값(가상 수수료·원가 등)이 남아 있으니 가져간 뒤 확인하세요.${broken ? ` <span style="color:var(--warn)">연결한 행사를 가져가지 않는 체크리스트 ${broken}개는 연결이 '삭제된 행사'로 표시됩니다.</span>` : ''}</div>
+    </div>`;
+  }
+  // 대량 업로드가 저장에 실패하면 반영한 자료를 화면에 둔 채 '다시 저장'을 제공한다(되돌리지 않음 — 다시 올리지 않아도 되게, 개선 3단계)
+  function retryBox(m) {
+    const b = document.createElement('button');
+    b.className = 'btn small'; b.style.marginLeft = '8px'; b.textContent = '다시 저장';
+    b.onclick = async () => {
+      b.disabled = true;
+      if (await MD.store.saveP()) { U.toast('저장했습니다.'); b.remove(); } else b.disabled = false; // 실패 안내는 저장 함수가 띄운다
+    };
+    m.appendChild(document.createTextNode(' 저장되지 않았습니다(화면에만 반영).'));
+    m.appendChild(b);
+  }
+  function bindCarry(box, choice, redraw) {
+    box.querySelectorAll('[data-carry]').forEach((cb) => (cb.onchange = () => { choice[cb.dataset.carry][cb.dataset.part] = cb.checked; redraw(); }));
+  }
   MD.SPECS = SPECS;
   MD.downloadUnifiedTemplate = () => downloadUnified();
   const ORDER = ['channels', 'products', 'sales', 'traffic', 'ads', 'compete'];
@@ -428,6 +490,8 @@
 
   MD.views.data = function (el) {
     const d = MD.data;
+    const focus = MD.state && MD.state.focus && MD.state.focus.view === 'data' ? MD.state.focus : null; // '오늘 확인할 일'에서 이동(마감 확인 표 등)
+    if (focus) { MD.state.focus = null; setTimeout(() => { const t = el.querySelector('#' + focus.id); if (t) t.scrollIntoView({ block: 'start' }); }, 0); }
     const intr = MD.store.interrupted;
     el.innerHTML = `${intr ? `<div class="card" style="border-color:var(--bad);margin-bottom:16px"><div class="card-head"><h2>지난 저장이 중간에 끝나지 못했습니다</h2></div>
         <p style="margin-top:0">${U.esc(intr.at.slice(0, 16).replace('T', ' '))}(UTC) 저장 중 일부 자료를 되돌리지 못했습니다. 다음 자료가 서로 다른 시점의 값일 수 있습니다: <b>${intr.keys.map(U.esc).join(', ')}</b>. 최근 백업 파일이 있으면 아래 '백업 복원'으로 되돌리는 것이 가장 안전합니다. 화면의 자료가 맞는지 확인했다면 '이대로 사용'을 누르세요(현재 자료 전체를 다시 저장).</p>
@@ -441,7 +505,7 @@
           <div><div class="k">상품</div><div class="v">${d.products.length}</div></div>
           <div><div class="k">행사·거래처·발주</div><div class="v">${d.promotions.length} · ${d.vendors.length} · ${d.pos.length}</div></div>
         </div>
-        <p class="note">데이터는 이 브라우저에만 저장되며 외부로 전송되지 않습니다. 다른 PC로 옮기거나 보관하려면 백업 파일을 내려받으세요.${d.isSample ? ' 판매·유입 데이터를 처음 올리면 예시 데이터는 비워지고 내 데이터로 바뀝니다. 아래 표에서 직접 고친 채널·상품만 남고, 행사·거래처·발주 예시는 지워집니다.' : ''} 추가·갱신 업로드는 같은 일자·채널(·SKU)의 기존 값을 새 파일의 합계로 바꿉니다(더하지 않음).</p>
+        <p class="note">데이터는 이 브라우저에만 저장되며 외부로 전송되지 않습니다. 다른 PC로 옮기거나 보관하려면 백업 파일을 내려받으세요.${d.isSample ? ' 판매·유입·광고·경쟁·상품·채널 파일을 처음 올리면 예시 데이터는 비워지고 내 데이터로 바뀝니다. 그때 예시 위에서 새로 만들거나 고친 자료(채널·상품·행사·거래처·발주·소싱 후보·이슈·체크리스트·검색 순위) 중 가져갈 것을 확인 화면에서 고릅니다.' : ''} 추가·갱신 업로드는 같은 일자·채널(·SKU)의 기존 값을 새 파일의 합계로 바꿉니다(더하지 않음).</p>
         <div class="row">
           <button class="btn" id="bk">백업 파일 받기 (.json)</button>
           <label class="btn">백업 복원<input type="file" id="rs" accept=".json" class="hide"></label>
@@ -496,7 +560,7 @@
 
     // 저장 사용량: 행 수·저장된 글자 수·마지막 저장 결과 (고정 한도 대비 %는 브라우저마다 달라 쓰지 않는다)
     const usage = MD.store.KEYS.map((k) => { let n = 0; try { n = (localStorage.getItem('mdwt:' + k) || '').length; } catch (e) { /* 접근 불가 */ } const v = d[k]; return { k, rows: Array.isArray(v) ? v.length : v && typeof v === 'object' ? Object.keys(v).length : 0, chars: n }; });
-    const LABEL = { channels: '채널', products: '상품', sales: '판매', traffic: '유입·광고비', promotions: '행사', vendors: '거래처', pos: '발주', candidates: '소싱 후보', targets: '목표', ads: '광고 리포트', closes: '마감 확인', compete: '경쟁 조사', events: '이슈 기록', reports: '보고서 확정본', checklists: '체크리스트', ranks: '검색 순위' };
+    const LABEL = Object.fromEntries(datasets().map((x) => [x.k, x.label])); // 등록표의 이름
     const idb = MD.store.backend() === 'IndexedDB';
     if (idb) usage.forEach((u) => { try { u.chars = JSON.stringify(d[u.k] ?? '').length; } catch (e) { /* 계산 불가 */ } }); // IndexedDB는 글자 수를 직접 볼 수 없어 직렬화 길이로
     const dataChars = usage.reduce((a, u) => a + u.chars, 0), ls = MD.store.lastSave;
@@ -555,14 +619,15 @@
       ${closeRows.map((r) => `<tr><td>${U.esc(r.ch)}${known.has(r.ch) ? '' : ' <span class="tag warn">목록에 없음</span>'}</td>${srcs.map(([k]) => {
         const c = MD.calc.closeOf(r.ch, k), last = r.last[k];
         const tag = !last ? '' : !c ? '<span class="tag hold">미확인</span>' : c < last ? '<span class="tag warn">이후 자료 미확인</span>' : '<span class="tag good">확인</span>';
-        return `<td><span class="muted" style="font-size:12px">${last || '자료 없음'}</span> → <input type="date" data-close="${k}" data-ch="${U.esc(r.ch)}" value="${c || ''}" style="width:140px"> ${tag}</td>`;
+        return `<td><span class="muted" style="font-size:12px">${last || '자료 없음'}</span> → <input type="date" data-close="${k}" data-ch="${U.esc(r.ch)}" value="${c || ''}" style="width:140px" aria-label="${U.esc(r.ch)} ${({ sales: '판매', traffic: '유입·광고비', ads: '광고 리포트' })[k] || k} 마감 확인일"> ${tag}</td>`;
       }).join('')}</tr>`).join('') || `<tr><td colspan="4" class="muted">자료가 없습니다.</td></tr>`}</tbody></table></div>`;
     el.querySelectorAll('[data-close]').forEach((inp) => (inp.onchange = () => {
       const k = inp.dataset.close, ch = inp.dataset.ch, v = inp.value || null;
       const last = (closeRows.find((r) => r.ch === ch) || { last: {} }).last[k];
       if (v && last && v > last) U.toast(`${ch}: 자료 마지막 날(${last}) 이후를 확인했습니다. 그 사이 날짜는 실적 0으로 봅니다.`);
-      MD.calc.setClose(ch, k, v); MD.store.save(['closes']);
-      const y = window.scrollY; MD.rerender(); window.scrollTo(0, y); // 표 위치를 잃지 않게
+      const before = JSON.parse(JSON.stringify(MD.data.closes || {})); // 실패하면 되돌릴 이전 마감 확인 (개선 3단계)
+      MD.calc.setClose(ch, k, v);
+      MD.store.saveP(['closes']).then((ok) => { if (!ok) MD.data.closes = before; const y = window.scrollY; MD.rerender(); window.scrollTo(0, y); }); // 표 위치를 잃지 않게
     }));
     const ca = el.querySelector('#closeAll');
     if (d.isSample) ca.disabled = true;
@@ -586,6 +651,7 @@
       try { sheets = await U.readGrid(f); } catch (err) { el.querySelector('#upMsg').textContent = '실패: ' + err.message; U.toast('통합 양식 실패: ' + err.message, 'bad'); return; }
       const norm = (s) => String(s).replace(/[\s·]/g, '');
       let mode = el.querySelector('#uniMode').value;
+      const carry = {};
       const draw = () => {
         const known = { channels: [], products: [] }, items = [];
         for (const k of ORDER) {
@@ -605,7 +671,7 @@
         const ok = items.filter((x) => !x.err);
         box.innerHTML = `<div class="card" style="border-color:var(--accent)">
           <div class="card-head"><h2>가져오기 전 확인 — 통합 양식</h2><span class="muted">${U.esc(f.name)} · 아직 저장하지 않았습니다</span></div>
-          ${MD.data.isSample ? '<div class="note" style="margin-top:0">반영하면 예시 데이터가 비워지고 내 데이터로 바뀝니다.</div>' : ''}
+          ${MD.data.isSample ? carryBox(carry) : ''}
           <div class="row end"><label class="field">반영 방식<select id="pvMode"><option value="merge" ${mode === 'merge' ? 'selected' : ''}>추가·갱신</option><option value="replace" ${mode === 'replace' ? 'selected' : ''}>전체 교체(파일에 있는 시트 종류만)</option></select></label></div>
           ${items.map((x) => `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
             <b>${SPECS[x.k].label}</b> <span class="muted" style="font-size:12px">시트 '${U.esc(x.sh.name)}' · 열 이름 ${(x.sh.start || 0) + x.h + 1}행</span>
@@ -614,9 +680,11 @@
           ${unknown.length ? `<div class="note">모르는 시트(반영 안 함): ${U.esc(unknown.join(', '))}. 시트 이름을 ${ORDER.map((k) => SPECS[k].label).join(', ')} 중 하나로 맞추세요.</div>` : ''}
           <div class="row" style="margin-top:12px"><button class="btn primary" id="pvGo" ${ok.length ? '' : 'disabled'}>${ok.length}개 시트 반영하기</button><button class="btn" id="pvCancel">취소</button></div></div>`;
         box.querySelector('#pvMode').onchange = (e) => { mode = e.target.value; draw(); };
+        bindCarry(box, carry, draw);
         box.querySelector('#pvCancel').onclick = () => { box.innerHTML = ''; };
         box.querySelector('#pvGo').onclick = async () => {
           if (mode === 'replace' && !confirm(`${ok.map((x) => SPECS[x.k].label).join(', ')}를 전부 교체합니다. 계속할까요?`)) return;
+          if (MD.data.isSample) MD.store.ensureReal(carry);
           const done = [], notes = [];
           for (const x of ok) {
             const extra = applyImport(x.k, x.res.rows, mode);
@@ -628,7 +696,8 @@
           MD.refresh();
           if (!MD.store.lastSave || MD.store.lastSave.ok) U.toast(`통합 양식 반영·저장: ${done.length}개 시트`);
           else U.toast('통합 양식을 화면에 반영했지만 저장하지 못했습니다. 새로고침하면 사라지니 백업 파일을 받아 두세요.', 'bad');
-          setTimeout(() => { const m = document.querySelector('#upMsg'); if (m) m.textContent = `반영: ${done.join(' / ')}${skipped.length ? ` · 건너뜀: ${skipped.join(', ')}` : ''} ${[...new Set(notes)].join(' ')}`; }, 50);
+          const okSave = !MD.store.lastSave || MD.store.lastSave.ok;
+          setTimeout(() => { const m = document.querySelector('#upMsg'); if (m) { m.textContent = `반영: ${done.join(' / ')}${skipped.length ? ` · 건너뜀: ${skipped.join(', ')}` : ''} ${[...new Set(notes)].join(' ')}`; if (!okSave) retryBox(m); } }, 50);
         };
       };
       draw();
@@ -648,6 +717,7 @@
       let hi = detectHeader(spec, sheets[si].grid);
       let mode = el.querySelector(`[data-mode=${k}]`).value;
       let override = savedMap(k, gridRows(sheets[si], hi).head);
+      const carry = {}; // 예시 → 내 데이터 전환 때 가져갈 자료 선택
       const draw = () => {
         const sh = sheets[si], g = gridRows(sh, hi), auto = autoMap(spec, g.head);
         let res = null, err = null;
@@ -659,7 +729,7 @@
         const headOpts = sh.grid.slice(0, 10).map((r, i) => (r.some((v) => v !== '') ? `<option value="${i}" ${i === hi ? 'selected' : ''}>${(sh.start || 0) + i + 1}행: ${U.esc(r.filter(Boolean).slice(0, 4).join(' · ').slice(0, 60))}</option>` : '')).join('');
         box.innerHTML = `<div class="card" style="border-color:var(--accent)">
           <div class="card-head"><h2>가져오기 전 확인 — ${spec.label}</h2><span class="muted">${U.esc(f.name)} · 아직 저장하지 않았습니다</span></div>
-          ${MD.data.isSample && ['sales', 'traffic', 'ads', 'compete'].includes(k) ? '<div class="note" style="margin-top:0">반영하면 예시 데이터가 비워지고 내 데이터로 바뀝니다.</div>' : ''}
+          ${MD.data.isSample ? carryBox(carry) : ''}
           <div class="row end">
             ${sheets.length > 1 ? `<label class="field">시트<select id="pvSheet">${sheets.map((s, i) => `<option value="${i}" ${i === si ? 'selected' : ''}>${U.esc(s.name)}</option>`).join('')}</select></label>` : ''}
             <label class="field">열 이름 행<select id="pvHead">${headOpts}</select></label>
@@ -667,7 +737,7 @@
           </div>
           <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>항목</th><th>파일의 열</th><th>첫 행 값</th></tr></thead><tbody>
             ${Object.entries(spec.cols).map(([f2, al]) => `<tr><td>${al[0]}${spec.required.includes(f2) ? ' <span class="tag bad">필수</span>' : ''}</td>
-              <td><select data-f="${f2}"><option value="">(사용 안 함)</option>${g.head.map((h) => `<option ${map[f2] === h ? 'selected' : ''}>${U.esc(h)}</option>`).join('')}</select>${f2 in override ? ' <span class="muted" style="font-size:11px">직접 지정</span>' : map[f2] ? ' <span class="muted" style="font-size:11px">자동</span>' : ''}</td>
+              <td><select data-f="${f2}" aria-label="${U.esc(al[0])}에 쓸 파일 열"><option value="">(사용 안 함)</option>${g.head.map((h) => `<option ${map[f2] === h ? 'selected' : ''}>${U.esc(h)}</option>`).join('')}</select>${f2 in override ? ' <span class="muted" style="font-size:11px">직접 지정</span>' : map[f2] ? ' <span class="muted" style="font-size:11px">자동</span>' : ''}</td>
               <td class="muted">${map[f2] ? U.esc(String(first[map[f2]] ?? '').slice(0, 40)) : '-'}</td></tr>`).join('')}
           </tbody></table></div>
           ${g.dup.length ? `<div class="note" style="color:var(--warn)">같은 이름의 열이 여러 개 있습니다: ${U.esc(g.dup.join(', '))}. 위치([C열] 등)를 붙여 구분했으니 쓸 열을 직접 고르세요.</div>` : ''}
@@ -678,10 +748,12 @@
         box.querySelector('#pvHead').onchange = (e) => { hi = Number(e.target.value); override = savedMap(k, gridRows(sheets[si], hi).head); draw(); };
         box.querySelector('#pvMode').onchange = (e) => { mode = e.target.value; draw(); };
         box.querySelectorAll('[data-f]').forEach((s) => (s.onchange = () => { const f2 = s.dataset.f; if (s.value === (auto[f2] || '')) delete override[f2]; else override[f2] = s.value; draw(); }));
+        bindCarry(box, carry, draw);
         box.querySelector('#pvCancel').onclick = () => { box.innerHTML = ''; };
         box.querySelector('#pvGo').onclick = async () => {
           if (mode === 'replace' && !confirm(`${spec.label}를 전부 교체합니다. 계속할까요?`)) return;
           rememberMap(k, g.head, override);
+          if (MD.data.isSample) MD.store.ensureReal(carry); // 고른 자료만 가져가며 내 데이터로 전환
           const why = res.bad ? ` 제외 ${res.bad}행 (${Object.entries(res.reasons).map(([r, n]) => `${r} ${n}`).join(', ')}). 원본 파일을 고쳐 다시 올리면 같은 행은 덮어씁니다.` : '';
           const extra = applyImport(k, res.rows, mode);
           await MD.store.saving; // IndexedDB 저장은 비동기 — 결과가 나온 뒤 안내
@@ -690,7 +762,7 @@
           if (saved) U.toast(`${spec.label} ${U.num(res.rows.length)}행 반영·저장${res.bad ? `, ${res.bad}행 제외` : ''}`);
           else U.toast(`${spec.label}를 화면에 반영했지만 저장하지 못했습니다. 새로고침하면 사라지니 백업 파일을 받아 두세요.`, 'bad');
           const note = (why + (extra || '')).trim();
-          if (note) setTimeout(() => { const m = document.querySelector('#upMsg'); if (m) m.textContent = note; }, 50);
+          if (note || !saved) setTimeout(() => { const m = document.querySelector('#upMsg'); if (m) { m.textContent = note; if (!saved) retryBox(m); } }, 50);
         };
       };
       draw();
@@ -710,6 +782,8 @@
       out.extras = {};
       try { for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (!key || !key.startsWith('mdwt:')) continue; const k = key.slice(5); if (INTERNAL.has(k) || MD.store.KEYS.includes(k)) continue; const v = U.store.get(k, null); if (v != null) out.extras[k] = v; } } catch (e) { /* 저장소 접근 불가 — 자료만 백업 */ }
       U.download(`MD워크툴_백업_${U.today()}.json`, JSON.stringify(out), 'application/json');
+      // '오늘 확인할 일'의 백업 안내용 — 다운로드 요청 시각(실제 저장 여부는 브라우저만 앎). 예시 자료 백업은 내 자료 백업으로 치지 않는다 (Codex 개선 4단계 R2-01)
+      if (!d.isSample) U.store.set('lastBackupAt', new Date().toISOString());
     };
     el.querySelector('#rs').onchange = async (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -719,23 +793,28 @@
         if (j.isSample) {
           // 판매 등 예시 자료는 다시 만들지만, 예시 모드에서 사용자가 직접 만든 자료(체크리스트·검색 순위)는 백업에서 되살린다
           // (Codex 기능 M R1-01, 기능 O R3-01). 검사는 초기화 전에 — 실패하면 현재 자료를 건드리지 않는다
-          const OWN = { checklists: '체크리스트', ranks: '검색 순위 기록' };
-          const own = Object.fromEntries(Object.keys(OWN).map((k) => [k, j[k] === undefined ? [] : j[k]]));
+          // 예시 모드에서 저장하던 자료 전체(SAMPLE_KEEP — 거래처·행사·상품·체크리스트 등, 예시 행·고친 행·새로 만든 행 모두)를 되살린다
+          // (Codex 개선 1단계 R1-03). 판매·유입·광고·마감은 예시로 다시 만든다
+          const own = Object.fromEntries(MD.store.SAMPLE_KEEP.filter((k) => Array.isArray(j[k])).map((k) => [k, j[k]]));
           const badS = checkBackup({ sales: [], ...own });
           if (badS.length) throw new Error(`백업 파일의 자료 형식이 맞지 않습니다(기존 자료 그대로): ${badS.slice(0, 3).join(' / ')}`);
-          const keep = Object.fromEntries(Object.entries(own).filter(([, v]) => v.length));
-          const what = Object.entries(keep).map(([k, v]) => `${OWN[k]} ${v.length}건`).join(', ');
-          if (!confirm(`예시 데이터에서 받은 백업입니다. 판매 등은 예시 데이터로 되돌리고${what ? `, 백업의 ${what}은 되살립니다` : ''}. 계속할까요?`)) return;
+          const keep = own;
+          // 직접 만들거나 고친 행 수: 목표는 예시 칸 표시(sampleFields), 이슈는 sample, 나머지는 sample·sampleEdited·userSet으로 판단
+          const isUser = (k, r) => (k === 'targets' ? !Array.isArray(r.sampleFields) : k === 'events' ? !r.sample : !r.sample || r.sampleEdited || r.userSet);
+          const userN = (k) => (keep[k] || []).filter((r) => r && isUser(k, r)).length;
+          const what = Object.keys(keep).filter((k) => userN(k)).map((k) => `${LABEL[k] || k} ${userN(k)}건`).join(', ');
+          if (!confirm(`예시 데이터에서 받은 백업입니다. 판매·유입·광고는 예시로 다시 만들고, 예시 상태에서 저장한 자료는 되살립니다${what ? `(직접 만들거나 고친 것: ${what})` : ''}. 계속할까요?`)) return;
           // 초기화와 되살릴 자료 저장을 한 작업으로 — 실패하면 초기화 전 자료가 그대로 (Codex 기능 M R2-02)
           if (!(await MD.store.resetToSample(keep))) return;
-          MD.refresh(); U.toast(`예시 데이터로 되돌렸습니다.${what ? ` ${what}을 되살렸습니다.` : ''}`);
+          MD.refresh(); U.toast(`예시 데이터로 되돌렸습니다.${what ? ` 직접 만들거나 고친 자료(${what})를 되살렸습니다.` : ''}`);
           return;
         }
         // 형식 검사는 현재 자료를 바꾸기 전에 끝낸다 — 잘못된 백업이 기존 저장 자료를 덮어쓰지 않게 (Codex 기능 K R1-01)
         const bad = checkBackup(j);
         if (bad.length) throw new Error(`백업 파일의 자료 형식이 맞지 않습니다(기존 자료 그대로): ${bad.slice(0, 3).join(' / ')}${bad.length > 3 ? ` 외 ${bad.length - 3}건` : ''}`);
         const closes = Object.fromEntries(Object.entries(j.closes || {}).filter(([, c]) => c && !c.sample));
-        const cand = { isSample: false, channels: j.channels || [], products: j.products || [], sales: j.sales, traffic: j.traffic || [], promotions: j.promotions || [], vendors: j.vendors || [], pos: j.pos || [], candidates: j.candidates || [], targets: j.targets || [], ads: j.ads || [], closes, compete: j.compete || [], events: (j.events || []).filter((x) => !x.sample), reports: j.reports || [], checklists: j.checklists || [], ranks: j.ranks || [] };
+        // 복원 후보: 등록표의 자료 전부. 마감 확인은 예시 표시를 뺀 것, 이슈는 예시 아닌 것만
+        const cand = { isSample: false, ...Object.fromEntries(datasets().map((ds) => [ds.k, ds.k === 'closes' ? closes : ds.k === 'events' ? (j.events || []).filter((x) => !x.sample) : j[ds.k] || emptyOf(ds)])) };
         // 저장 전에 화면 자료를 한 번 만들어 본다. 실패하면 이전 자료로 되돌리고 저장하지 않는다
         const prev = MD.data;
         try { trialBackup(cand); } catch (err2) { MD.data = prev; MD.buildIndex(); throw new Error(`백업 자료로 화면을 만들 수 없습니다(기존 자료 그대로): ${err2.message}`); }
@@ -767,6 +846,7 @@
 
     // 사용자가 고친 행은 userSet으로 표시 — 예시 → 실데이터 전환 때 이 행만 남긴다
     const masterSave = (k) => (kind, row, meta) => {
+      if (k === 'channels' && kind === 'edit' && meta && meta.key === 'fee' && !(Number.isFinite(meta.value) && meta.value >= 0 && meta.value < 1)) { U.toast('수수료율은 0 이상 100% 미만으로 입력하세요.', 'bad'); return false; }
       if (k === 'channels' && kind === 'edit' && meta && meta.key === 'name' && meta.old !== meta.value) {
         const to = String(meta.value).trim(), from = meta.old;
         if (!to) { U.toast('채널명은 비울 수 없습니다.', 'bad'); return false; }
@@ -777,15 +857,37 @@
         const n = MD.calc.channelRefs(from);
         const what = [['판매', n.sales, '행'], ['유입', n.traffic, '행'], ['광고', n.ads, '행'], ['목표', n.targets, '건'], ['행사', n.promotions, '건'], ['마감 확인', n.closes, '건']].filter((x) => x[1]).map((x) => `${x[0]} ${U.num(x[1])}${x[2]}`).join('·');
         if (!confirm(`채널명을 '${from}'에서 '${to}'(으)로 바꿉니다.${what ? ` ${what}의 채널명도 함께 바뀝니다.` : ''} 계속할까요?`)) return false;
+        const D = MD.data, hadUser = row.userSet;
+        // 판매·유입·광고·행사 행은 저장 뒤에도 같은 객체라 바꾼 행만 기억하고, 목표는 저장 때 정리되며 새 객체로 바뀌므로 목록째 복사해 둔다
+        const changed = ['sales', 'traffic', 'ads', 'promotions'].flatMap((k) => (D[k] || []).filter((r) => r.channel === from));
+        const targetsBefore = (D.targets || []).map((t) => ({ ...t }));
+        const closesFrom = D.closes && D.closes[from], hadTo = D.closes && Object.prototype.hasOwnProperty.call(D.closes, to), closesTo = hadTo ? D.closes[to] : undefined;
         row.name = to;
         MD.calc.renameChannel(from, to);
         row.userSet = true;
-        Promise.resolve(MD.store.save()).then((ok) => { if (ok) U.toast(`채널명을 바꿨습니다: ${from} → ${to}`); });
-        return true;
+        // 저장 결과를 공통 편집기에 돌려준다. 실패하면 이름·연결 자료·마감 확인·손댄 표시를 바꾸기 전으로 (Codex 개선 3단계 R1-01)
+        return MD.store.saveP().then((ok) => {
+          if (ok) { U.toast(`채널명을 바꿨습니다: ${from} → ${to}`); return true; }
+          changed.forEach((r) => { r.channel = from; });
+          D.targets = targetsBefore;
+          if (closesFrom !== undefined) { D.closes[from] = closesFrom; if (hadTo) D.closes[to] = closesTo; else delete D.closes[to]; }
+          if (!hadUser) delete row.userSet;
+          row.name = from; // 색인(channelMap)을 만들기 전에 이름부터 되돌린다 — 편집기 복원은 이 뒤라 색인에 새 이름이 남던 문제 (Codex 개선 3단계 R2-01)
+          MD.buildIndex();
+          return false; // 공통 편집기도 채널명 칸을 이전 값으로 되돌린다(같은 값)
+        });
       }
+      const hadUser = row && row.userSet;
       if (row) row.userSet = true;
-      if (MD.data.isSample && k === 'products') U.toast('예시 상태의 상품 수정은 새로고침하면 사라집니다. 첫 판매 데이터를 올릴 때까지는 유지됩니다.');
-      MD.store.save([k]);
+      // 원가·수수료 변경은 기록하고(개선 7단계), 판매가 있으면 과거 기간 이익도 다시 계산된다고 알린다
+      const costField = kind === 'edit' && meta && ((k === 'products' && meta.key === 'cost') || (k === 'channels' && meta.key === 'fee'));
+      const logged = costField ? MD.calc.logChange(k === 'products' ? 'cost' : 'fee', k === 'products' ? row.sku : row.name, meta.old, meta.value) : null;
+      // 저장 결과를 공통 편집기에 돌려줘 실패하면 값·행을 되돌리게 하고, 손댄 표시·변경 기록도 이전으로 (개선 3단계)
+      return MD.store.saveP(logged ? [k, 'changes'] : [k]).then((ok) => {
+        if (!ok) { if (row && !hadUser) delete row.userSet; if (logged) { const j = MD.data.changes.indexOf(logged); if (j !== -1) MD.data.changes.splice(j, 1); } return ok; }
+        if (logged && MD.data.sales.some((r) => (k === 'products' ? r.sku === row.sku : r.channel === row.name))) U.toast(`${k === 'products' ? '원가' : '수수료율'}를 바꿨습니다. 계산은 현재 값을 기간 전체에 적용하므로 과거 기간의 이익도 다시 계산됩니다(확정본은 그대로).`);
+        return ok;
+      });
     };
     MD.crud(el.querySelector('#chT'), {
       fields: [{ key: 'name', label: '채널명', width: '170px' }, { key: 'type', label: '유형', width: '110px' }, { key: 'fee', label: '수수료율(%)', type: 'pct', width: '90px' }, { key: 'target', label: '월 목표(원)', type: 'number', width: '140px' }],

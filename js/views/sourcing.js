@@ -80,14 +80,21 @@
       let v = t.value;
       if (t.dataset.k === 'margin') v = v === '' ? '' : Number(v) / 100;
       else if (['lastYearQty', 'moq', 'popularity', 'outlook'].includes(t.dataset.k)) v = Number(v);
+      const prev = c[t.dataset.k], hadEdited = c.sampleEdited;
       c[t.dataset.k] = v;
-      MD.store.save(['candidates']); drawTable();
+      if (c && c.sample) c.sampleEdited = true; // 고친 예시 행 (개선 1단계)
+      // 저장 실패면 값·표시를 되돌린다 (개선 3단계)
+      MD.store.saveP(['candidates']).then((ok) => { if (!ok) { c[t.dataset.k] = prev; if (hadEdited) c.sampleEdited = hadEdited; else delete c.sampleEdited; } drawTable(); });
     });
     tbl.addEventListener('click', (e) => {
       const i = e.target.dataset.del; if (i == null) return;
-      if (confirm('이 후보를 삭제할까요?')) { d.candidates.splice(Number(i), 1); MD.store.save(['candidates']); drawTable(); }
+      if (confirm('이 후보를 삭제할까요?')) { const removed = d.candidates.splice(Number(i), 1)[0]; MD.store.saveP(['candidates']).then((ok) => { if (!ok) d.candidates.splice(Number(i), 0, removed); drawTable(); }); }
     });
-    el.querySelector('#cAdd').onclick = () => { d.candidates.push({ name: '새 후보', brand: '', category: '', popularity: 3, lastYearQty: 0, outlook: 3, margin: target, supplier: '', moq: '', memo: '' }); MD.store.save(['candidates']); drawTable(); };
+    el.querySelector('#cAdd').onclick = () => {
+      const row = { name: '새 후보', brand: '', category: '', popularity: 3, lastYearQty: 0, outlook: 3, margin: target, supplier: '', moq: '', memo: '' };
+      d.candidates.push(row);
+      MD.store.saveP(['candidates']).then((ok) => { if (!ok) { const j = d.candidates.indexOf(row); if (j !== -1) d.candidates.splice(j, 1); } drawTable(); });
+    };
     el.querySelectorAll('[data-w]').forEach((i) => {
       i.oninput = () => {
         let v = Number(i.value);

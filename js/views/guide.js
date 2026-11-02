@@ -62,6 +62,7 @@
     const unlock = { sales: '대시보드·상품·목표 실적·보고서', traffic: '전환율·유입 분석, 전환율 목표', ads: '광고 ROAS(필수) → 노출·클릭·전환·캠페인 열로 CTR·CPC·CPA·캠페인 분석', products: '이익·이익률, 재고 일수, ABC', channels: '수수료·월 기본 목표', compete: '경쟁 가격 격차 → 순위·리뷰·평점 열로 순위 변화·리뷰 격차' };
     const when = { sales: '매주 또는 월초(지난달 전체)', traffic: '매주', ads: '매주(플랫폼 리포트)', products: '신상품·원가 변경 때', channels: '수수료·목표 변경 때', compete: '주 1회 같은 요일 조사 권장' };
     el.innerHTML = `
+      <div id="todayHub"></div>
       ${d.isSample ? '<div class="note" style="margin-bottom:12px">지금은 예시 데이터입니다. 아래 상태 표시는 예시 기준이며, 내 데이터를 올리면 실제 상태로 바뀝니다.</div>' : ''}
       <div class="card"><div class="card-head"><h2>${label(M)} 월초 체크</h2><span class="muted">${doneN}/${need}단계 완료 · 순서대로 진행하세요</span></div>
         <ol class="guide-steps">${list.map((s) => `<li class="${s.done === true ? 'done' : s.done === false ? 'todo' : 'na'}">
@@ -87,5 +88,6 @@
       </div>`;
     el.querySelector('#gdTpl').onclick = () => MD.downloadUnifiedTemplate();
     el.querySelectorAll('[data-act="lm"]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); MD.state.preset = 'lm'; MD.refresh(); location.hash = '#report'; }));
+    if (MD.renderToday) MD.renderToday(el.querySelector('#todayHub')); // '오늘 확인할 일' 허브 (개선 4단계)
   };
 })();

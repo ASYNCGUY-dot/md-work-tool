@@ -3,34 +3,53 @@
   const U = MD.util;
 
   // fields: [{key, label, type: text|number|date|select|pct, options, width}]
-  MD.crud = function (el, { fields, list, onChange, newRow, rowClass, extra }) {
+  MD.crud = function (el, { fields, list, onChange, newRow, rowClass, extra, rowName }) {
+    // 입력칸 이름(화면 읽기 프로그램용): '열 이름 — 행 이름'. 행 이름은 기본으로 첫 열 값(업체명·발주번호·SKU 등) (개선 6단계)
+    const nameOf = (r, i) => String((rowName ? rowName(r) : r[fields[0].key]) || `${i + 1}번째 행`);
     function cell(f, r, i) {
       const v = r[f.key];
-      const st = f.width ? `style="width:${f.width}"` : '';
+      const st = (f.width ? `style="width:${f.width}"` : '') + ` aria-label="${U.esc(`${f.label} — ${nameOf(r, i)}`)}"`;
       if (f.type === 'select') return `<select data-i="${i}" data-k="${f.key}" ${st}>${(v != null && v !== '' && !f.options.includes(v) ? [...f.options, v] : f.options).map((o) => `<option ${o === v ? 'selected' : ''}>${U.esc(o)}</option>`).join('')}</select>`;
       if (f.type === 'pct') return `<input type="number" step="0.1" data-i="${i}" data-k="${f.key}" data-pct="1" value="${v === '' || v == null ? '' : Math.round(v * 1000) / 10}" ${st}>`;
       return `<input type="${f.type || 'text'}" data-i="${i}" data-k="${f.key}" value="${U.esc(v ?? '')}" ${st}>`;
     }
     function draw() {
-      el.innerHTML = `<div class="table-wrap"><table><thead><tr>${extra ? '<th></th>' : ''}${fields.map((f) => `<th class="${f.type === 'number' || f.type === 'pct' ? 'num' : ''}">${f.label}</th>`).join('')}<th></th></tr></thead>
-        <tbody>${list().map((r, i) => `<tr class="${rowClass ? rowClass(r) : ''}">${extra ? `<td>${extra(r)}</td>` : ''}${fields.map((f) => `<td>${cell(f, r, i)}</td>`).join('')}<td class="actions"><button class="btn small danger" data-del="${i}">삭제</button></td></tr>`).join('') || `<tr><td colspan="${fields.length + 2}" class="muted" style="text-align:center;padding:16px">항목이 없습니다.</td></tr>`}</tbody></table></div>
+      // 첫 열(식별 열)은 가로로 넘겨도 보이게 고정(sticky-col)
+      el.innerHTML = `<div class="table-wrap"><table><thead><tr>${extra ? '<th></th>' : ''}${fields.map((f, j) => `<th class="${f.type === 'number' || f.type === 'pct' ? 'num' : ''}${j === 0 ? ' sticky-col' : ''}">${f.label}</th>`).join('')}<th></th></tr></thead>
+        <tbody>${list().map((r, i) => `<tr class="${rowClass ? rowClass(r) : ''}">${extra ? `<td>${extra(r)}</td>` : ''}${fields.map((f, j) => `<td${j === 0 ? ' class="sticky-col"' : ''}>${cell(f, r, i)}</td>`).join('')}<td class="actions"><button class="btn small danger" data-del="${i}" aria-label="${U.esc(`${nameOf(r, i)} 삭제`)}">삭제</button></td></tr>`).join('') || `<tr><td colspan="${fields.length + 2}" class="muted" style="text-align:center;padding:16px">항목이 없습니다.</td></tr>`}</tbody></table></div>
         ${newRow ? '<div class="row" style="margin-top:10px"><button class="btn small" data-add>+ 행 추가</button></div>' : ''}`;
     }
     draw();
     // onChange는 기존처럼 동기 false로 되돌릴 수도, Promise<boolean>으로 저장 결과가 나온 뒤 되돌릴 수도 있다 (저장 실패 시 복구용)
     function applyResult(res, revert) {
-      if (res && typeof res.then === 'function') res.then((ok) => { if (ok === false) revert(); draw(); });
+      if (res && typeof res.then === 'function') res.then((ok) => { if (ok === false) revert(); draw(); }, () => { revert(); draw(); });
       else { if (res === false) revert(); draw(); }
     }
+    // 칸마다 '마지막으로 저장된 값'과 진행 중 저장 수를 기억한다. 같은 칸을 저장이 끝나기 전에 다시 고쳐도, 실패하면 그 칸의 마지막
+    // 저장 완료 값으로 되돌린다(앞 편집의 미저장 값을 다시 쓰지 않음). 저장은 차례로 처리되므로 성공한 편집의 값이 곧 저장된 값 (Codex 개선 3단계 R1-02)
+    const cellState = new WeakMap();
+    const cellOf = (row, k) => { let m = cellState.get(row); if (!m) cellState.set(row, (m = {})); return m[k] || (m[k] = { pending: 0, base: undefined }); };
     el.onchange = (e) => {
       const t = e.target; if (t.dataset.i == null) return;
       const f = fields.find((x) => x.key === t.dataset.k);
       let v = t.value;
       if (t.dataset.pct) v = v === '' ? 0 : Number(v) / 100;
       else if (f.type === 'number') v = v === '' ? 0 : Number(v);
-      const row = list()[t.dataset.i], old = row[t.dataset.k];
-      row[t.dataset.k] = v;
-      applyResult(onChange('edit', row, { key: t.dataset.k, old, value: v }), () => { row[t.dataset.k] = old; });
+      const row = list()[t.dataset.i], key = t.dataset.k, old = row[key], hadEdited = row.sampleEdited;
+      const cell = cellOf(row, key);
+      if (cell.pending === 0) cell.base = { value: old, edited: hadEdited };
+      row[key] = v;
+      if (row.sample && old !== v) row.sampleEdited = true; // 고친 예시 행 — 내 데이터 전환 때 고를 수 있게 (개선 1단계)
+      const res = onChange('edit', row, { key, old, value: v });
+      if (res && typeof res.then === 'function') {
+        cell.pending++;
+        res.then((ok) => ok !== false, () => false).then((ok) => {
+          cell.pending--;
+          if (ok) cell.base = { value: v, edited: row.sampleEdited };
+          else if (cell.pending === 0) { row[key] = cell.base.value; if (cell.base.edited) row.sampleEdited = cell.base.edited; else delete row.sampleEdited; }
+          draw();
+        });
+      } else applyResult(res, () => { row[key] = old; if (hadEdited) row.sampleEdited = hadEdited; else delete row.sampleEdited; });
     };
     el.onclick = (e) => {
       const t = e.target;
@@ -57,12 +76,21 @@
   const LABEL = { status: '상태', terms: '거래 조건', contractEnd: '계약·판권 만료' };
 
   // 거래처의 계약 요약: 유효 계약 수, 가장 빠른 만료일, 갱신 통보 기한(만료일 − 통보 일수)
+  // soonNotice = 통보 기한이 오늘~30일 안, lateNotice = 만료 전인데 통보 기한이 이미 지난 것.
+  // 지난 기한을 알림에서 빼면 가장 급한 항목이 사라지므로 따로 모아 함께 보여 준다 (Codex 개선 논의 2026-11-01)
   MD.vendorContracts = function (v, today = U.today()) {
     const list = (Array.isArray(v.contracts) ? v.contracts : []).filter((c) => c.status === '유효');
-    const ends = list.filter((c) => c.end).map((c) => c.end).sort();
-    const notices = list.filter((c) => c.end && Number(c.noticeDays) > 0).map((c) => ({ c, by: U.addDays(c.end, -Number(c.noticeDays)) }));
-    const end = ends[0] || v.contractEnd || null; // 계약 상세가 없으면 목록의 만료일
-    return { active: list.length, end, notices, soonNotice: notices.filter((x) => x.by >= today && U.diffDays(today, x.by) <= 30).sort((a, b) => (a.by < b.by ? -1 : 1)) };
+    const ends = list.filter((c) => c.end && c.end >= today).map((c) => c.end).sort();
+    // 통보 일수는 1~3650일 정수만 계산(잘못 저장된 값이 날짜 계산 예외로 화면 전체를 멈추지 않게, Codex 개선 0단계 R1-02)
+    const okN = (n) => Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= 3650;
+    const notices = list.filter((c) => c.end && U.normDate(c.end) && okN(c.noticeDays)).map((c) => ({ c, by: U.addDays(c.end, -Number(c.noticeDays)) }));
+    const end = ends[0] || (v.contractEnd && !list.length ? v.contractEnd : null); // 계약 상세가 없으면 목록의 만료일
+    const state = (by) => (by < today ? 'late' : by === today ? 'today' : 'soon');
+    const byDate = (a, b) => (a.by < b.by ? -1 : 1);
+    const soonNotice = notices.filter((x) => x.by >= today && U.diffDays(today, x.by) <= 30).map((x) => ({ ...x, state: state(x.by) })).sort(byDate);
+    const lateNotice = notices.filter((x) => x.by < today && x.c.end >= today).map((x) => ({ ...x, state: 'late' })).sort(byDate);
+    const expired = list.filter((c) => c.end && c.end < today); // 만료일이 지났는데 상태가 '유효'
+    return { active: list.length, end, notices, soonNotice, lateNotice, expired };
   };
 
   function detail(el, d, v, today, save) {
@@ -121,6 +149,7 @@
       extra: (c) => { const l = safeLink(c.link); return l ? `<a href="${U.esc(l)}" target="_blank" rel="noopener noreferrer">계약서</a>` : ''; },
       onChange: (kind, row, ch) => {
         if (kind === 'edit' && ch && (ch.key === 'start' || ch.key === 'end') && ch.value && !U.normDate(ch.value)) { U.toast('날짜 형식이 아닙니다.', 'bad'); return false; }
+        if (kind === 'edit' && ch && ch.key === 'noticeDays' && !(Number.isInteger(ch.value) && ch.value >= 0 && ch.value <= 3650)) { U.toast('통보 일수는 0~3650일 사이 정수로 입력하세요.', 'bad'); return false; }
         let pushedHistory = false;
         if (kind === 'edit' && ch && ['status', 'end', 'terms'].includes(ch.key) && ch.old !== ch.value) {
           v.history.push({ id: uid('H'), date: today, kind: ch.key === 'status' ? '계약' : '조건 변경', text: `${row.title || row.kind} ${({ status: '계약 상태', end: '만료일', terms: '조건' })[ch.key]}: ${ch.old || '(없음)'} → ${ch.value || '(없음)'}` });
@@ -149,13 +178,17 @@
 
   MD.views.vendors = function (el) {
     const d = MD.data, today = U.today();
+    const focus = MD.state && MD.state.focus && MD.state.focus.view === 'vendors' ? MD.state.focus : null; // '오늘 확인할 일'에서 이동 — 그 거래처 상세를 연다
+    if (focus) { detailId = focus.id; MD.state.focus = null; }
     const TYPES = ['해외 공급처', 'B2B 거래처', '플랫폼 담당자', '협력사', '판권·라이선스'];
     const STATUS = ['발굴', '제안', '협의중', '거래중', '보류', '중단'];
     d.vendors.forEach((v) => { if (!v.id) v.id = uid('V'); }); // 상세 화면 연결용 (다음 저장 때 함께 저장)
     const info = new Map(d.vendors.map((v) => [v, MD.vendorContracts(v, today)]));
     const overdue = d.vendors.filter((v) => v.due && v.due < today && v.status !== '중단');
     const soon = d.vendors.filter((v) => { const e = info.get(v).end; return e && e >= today && U.diffDays(today, e) <= 60; });
-    const notices = d.vendors.flatMap((v) => info.get(v).soonNotice.map((x) => ({ v, ...x })));
+    const notices = d.vendors.flatMap((v) => [...info.get(v).lateNotice, ...info.get(v).soonNotice].map((x) => ({ v, ...x })));
+    const expired = d.vendors.flatMap((v) => info.get(v).expired.map((c) => ({ v, c })));
+    const lateN = notices.filter((x) => x.state === 'late').length;
     const counts = Object.fromEntries(STATUS.map((s) => [s, d.vendors.filter((v) => v.status === s).length]));
     // localStorage는 Boolean을, IndexedDB는 Promise를 돌려준다 — 항상 Promise<boolean>으로 맞춰 .then·await 모두 안전하게 쓴다
     const save = () => {
@@ -168,11 +201,14 @@
         <div class="kpi"><div class="k">거래중</div><div class="v">${counts['거래중']}곳</div><div class="s">전체 ${d.vendors.length}곳</div></div>
         <div class="kpi"><div class="k">발굴·제안·협의 파이프라인</div><div class="v">${counts['발굴'] + counts['제안'] + counts['협의중']}곳</div><div class="s">발굴 ${counts['발굴']} · 제안 ${counts['제안']} · 협의 ${counts['협의중']}</div></div>
         <div class="kpi"><div class="k">기한 지난 후속 조치</div><div class="v" style="color:var(${overdue.length ? '--bad' : '--good'})">${overdue.length}건</div></div>
-        <div class="kpi"><div class="k">60일 내 계약·판권 만료</div><div class="v" style="color:var(${soon.length ? '--bad' : '--good'})">${soon.length}건</div><div class="s">${notices.length ? `갱신 통보 기한 30일 내 ${notices.length}건` : ''}</div></div>
+        <div class="kpi"><div class="k">60일 내 계약·판권 만료</div><div class="v" style="color:var(${soon.length ? '--bad' : '--good'})">${soon.length}건</div><div class="s">${notices.length ? `갱신 통보 ${notices.length}건${lateN ? ` (기한 지남 ${lateN})` : ''}` : ''}</div></div>
       </div>
-      ${overdue.length || soon.length || notices.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>오늘 챙길 일</h2></div><ul class="insights">
+      ${overdue.length || soon.length || notices.length || expired.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>오늘 챙길 일</h2></div><ul class="insights">
         ${overdue.map((v) => `<li class="bad"><span class="tag bad">D+${U.diffDays(v.due, today)}</span><b>${U.esc(v.name)}</b> — ${U.esc(v.next)}</li>`).join('')}
-        ${notices.map((x) => `<li class="warn"><span class="tag warn">통보 D-${U.diffDays(today, x.by)}</span><b>${U.esc(x.v.name)}</b> ${U.esc(x.c.title || x.c.kind)} — ${U.esc(x.by)}까지 갱신·해지 통보(만료 ${U.esc(x.c.end)}, ${U.esc(x.c.renewal || '')})</li>`).join('')}
+        ${notices.map((x) => x.state === 'late'
+          ? `<li class="bad"><span class="tag bad">통보 기한 D+${U.diffDays(x.by, today)}</span><b>${U.esc(x.v.name)}</b> ${U.esc(x.c.title || x.c.kind)} — 갱신·해지 통보 기한(${U.esc(x.by)})이 지났습니다. 통보했는지 확인하세요(만료 ${U.esc(x.c.end)}, ${U.esc(x.c.renewal || '')})</li>`
+          : `<li class="warn"><span class="tag warn">${x.state === 'today' ? '통보 오늘' : `통보 D-${U.diffDays(today, x.by)}`}</span><b>${U.esc(x.v.name)}</b> ${U.esc(x.c.title || x.c.kind)} — ${U.esc(x.by)}까지 갱신·해지 통보(만료 ${U.esc(x.c.end)}, ${U.esc(x.c.renewal || '')})</li>`).join('')}
+        ${expired.map((x) => `<li class="bad"><span class="tag bad">만료 지남</span><b>${U.esc(x.v.name)}</b> ${U.esc(x.c.title || x.c.kind)} — 만료일 ${U.esc(x.c.end)}이 지났는데 상태가 '유효'입니다. 갱신 여부를 확인해 상태를 바꾸세요</li>`).join('')}
         ${soon.map((v) => `<li class="warn"><span class="tag warn">만료 D-${U.diffDays(today, info.get(v).end)}</span><b>${U.esc(v.name)}</b> 계약 만료 ${U.esc(info.get(v).end)} — 갱신·재협상 일정 확인</li>`).join('')}
       </ul></div>` : ''}
       <div class="card" style="margin-top:16px" id="vCard">
@@ -225,6 +261,15 @@
       if (detailId) setTimeout(() => { const b = document.querySelector('#vDetail'); if (b) b.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 0);
     });
     const sel = detailId && d.vendors.find((v) => v.id === detailId);
-    if (sel) detail(el, d, sel, today, save);
+    // 상세(기본 정보·계약·이력)를 고치면 예시 거래처도 '고친 예시 행'으로 표시 — 저장 실패면 표시도 되돌린다 (Codex 개선 1단계 R1-01)
+    const saveSel = async () => {
+      const prev = sel.sampleEdited;
+      if (sel.sample) sel.sampleEdited = true;
+      const ok = await save();
+      if (!ok) { if (prev) sel.sampleEdited = prev; else delete sel.sampleEdited; }
+      return ok;
+    };
+    if (sel) detail(el, d, sel, today, saveSel);
+    if (focus && sel) setTimeout(() => { const b = el.querySelector('#vDetail'); if (b) b.scrollIntoView({ block: 'start' }); }, 0);
   };
 })();

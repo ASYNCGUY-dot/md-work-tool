@@ -19,6 +19,9 @@
   // 확정본 보기: 저장 당시 본문 그대로 + 같은 기간 현재 자료와의 매출 차이 + 수정 문구
   function viewSnapshot(el, snap) {
     const now = C.period(snap.start, snap.end).sum, diff = now.sales - ((snap.nums && snap.nums.sales) || 0);
+    // 매출이 같아도 원가·수수료·광고비 기준이 바뀌면 이익이 달라진다 — 확정본에 저장된 값과 비교 (개선 7단계)
+    const otherDiffs = [['gross', '매출총이익'], ['contrib', '공헌이익'], ['adSpend', '광고비']].filter(([k]) => snap.nums && Number.isFinite(snap.nums[k]) && Math.abs((now[k] || 0) - snap.nums[k]) >= 1)
+      .map(([k, label]) => `${label} ${now[k] - snap.nums[k] > 0 ? '+' : ''}${U.won(now[k] - snap.nums[k])}`);
     const notes = (Array.isArray(snap.notes) ? snap.notes : []).filter((n) => n && typeof n.text === 'string'); // 복원 검사를 통과했어도 그릴 때 한 번 더
     el.innerHTML = `
       <div class="row no-print" style="margin-bottom:14px">
@@ -29,7 +32,7 @@
       </div>
       <div class="card no-print" style="border-color:var(--accent);margin-bottom:14px">
         <b>확정본</b> · 저장 ${localTime(snap.at)}${snap.memo ? ` · ${U.esc(snap.memo)}` : ''} — 저장 뒤 자료가 바뀌어도 이 내용은 바뀌지 않습니다.
-        <div class="muted" style="font-size:12px;margin-top:4px">같은 기간(${U.esc(snap.start)} ~ ${U.esc(snap.end)}) 현재 자료 매출 ${U.won(now.sales)} · ${Math.abs(diff) < 1 ? '확정본과 일치' : `확정본 대비 <b style="color:var(--warn)">${diff > 0 ? '+' : ''}${U.won(diff)}</b> (확정 뒤 자료가 추가·수정됨)`}${snap.confirmed === false ? ` · 확정 당시 판매 자료 마감 미확인 채널 ${(snap.unconfirmed || []).length}개` : ''}</div>
+        <div class="muted" style="font-size:12px;margin-top:4px">같은 기간(${U.esc(snap.start)} ~ ${U.esc(snap.end)}) 현재 자료 매출 ${U.won(now.sales)} · ${Math.abs(diff) < 1 ? '확정본과 일치' : `확정본 대비 <b style="color:var(--warn)">${diff > 0 ? '+' : ''}${U.won(diff)}</b> (확정 뒤 자료가 추가·수정됨)`}${otherDiffs.length ? ` · <b style="color:var(--warn)">이익·광고비 변경 있음</b>(${otherDiffs.join(', ')} — 원가·수수료·계산 기준이나 광고 자료가 바뀜)` : ' · 이익·광고비도 일치'}${snap.confirmed === false ? ` · 확정 당시 판매 자료 마감 미확인 채널 ${(snap.unconfirmed || []).length}개` : ''}</div>
       </div>
       <div class="report">${cleanHtml(snap.html)}
         ${notes.length ? `<h2>수정 문구</h2><ul>${notes.map((n) => `<li>${localTime(n.at)} — ${U.esc(n.text)}</li>`).join('')}</ul>` : ''}

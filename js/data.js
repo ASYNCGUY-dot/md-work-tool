@@ -193,11 +193,40 @@
       { date: U.addDays(end, -40), end: U.addDays(end, -38), kind: '외부', title: '이른 한파로 아우터 검색량 급증 (예시)', channel: '', sample: true },
       { date: U.addDays(end, -15), end: U.addDays(end, -15), kind: '내부', title: '상세페이지 리뉴얼 반영 (예시)', channel: '네이버 스마트스토어', sample: true },
     ];
-    return { isSample: true, channels, products, sales, traffic, promotions, vendors, pos, candidates, targets, ads, closes, compete: [], events, reports: [], checklists: [], ranks: [], savedAt: null };
+    // 예시로 만든 행에 sample 표시 — 내 데이터로 전환할 때 사용자가 새로 만든 행·고친 예시 행(sampleEdited)과 구분한다 (개선 1단계)
+    for (const list of [channels, products, promotions, vendors, pos, candidates]) list.forEach((x) => { x.sample = true; });
+    return { isSample: true, channels, products, sales, traffic, promotions, vendors, pos, candidates, targets, ads, closes, compete: [], events, reports: [], checklists: [], ranks: [], changes: [], savedAt: null };
   }
 
   // ---------- 상태 ----------
-  const KEYS = ['channels', 'products', 'sales', 'traffic', 'promotions', 'vendors', 'pos', 'candidates', 'targets', 'ads', 'closes', 'compete', 'events', 'reports', 'checklists', 'ranks'];
+  // ---------- 업무 자료 종류 등록표 (개선 2단계, Codex 논의 2026-11-01) ----------
+  // 자료 종류마다 키·이름·형태·예시 모드 처리·전환 후보 규칙을 여기 한 곳에 둔다. 저장 키(KEYS)·예시 모드 저장/재생성·
+  // 내 데이터 전환·빈 시작·백업 검사 대상·복원 후보·사용량 표가 이 표를 읽는다. 새 자료 종류는 여기 한 줄 + 백업 행 규칙(datamgmt.js ROW_RULES).
+  //  shape: 'list'(기본) | 'map' / sample: 'keep'(예시 모드에서도 저장·복원) | 'regen'(예시로 다시 만들어 저장 안 함) | 'none'(저장만, 예시 모드 복원 대상 아님)
+  //  carry: 내 데이터 전환 때 가져갈 후보 — key(예시 행 판별 키), touchedOnly(손댄 행만), editedDefault(고친 예시 행 기본 선택)
+  //  toReal: carry 대신 전환 때 값을 바꾸는 함수(목표는 예시 칸만 지움)
+  const DATASETS = [
+    { k: 'channels', label: '채널', sample: 'keep', carry: { key: 'name', touchedOnly: true, editedDefault: true } },
+    { k: 'products', label: '상품', sample: 'keep', carry: { key: 'sku', touchedOnly: true, editedDefault: true } },
+    { k: 'sales', label: '판매', sample: 'regen' },
+    { k: 'traffic', label: '유입·광고비', sample: 'regen' },
+    { k: 'promotions', label: '행사', sample: 'keep', carry: { key: 'id' } },
+    { k: 'vendors', label: '거래처', sample: 'keep', carry: { key: 'name' } },
+    { k: 'pos', label: '발주', sample: 'keep', carry: { key: 'po' } },
+    { k: 'candidates', label: '소싱 후보', sample: 'keep', carry: { key: 'name' } },
+    { k: 'targets', label: '목표', sample: 'keep', toReal: (list) => realTargets(list) },
+    { k: 'ads', label: '광고 리포트', sample: 'regen' },
+    { k: 'closes', label: '마감 확인', shape: 'map', sample: 'regen' },
+    { k: 'compete', label: '경쟁 조사', sample: 'keep' },
+    { k: 'events', label: '이슈 기록', sample: 'keep', carry: {} },
+    { k: 'reports', label: '보고서 확정본', sample: 'none' },
+    { k: 'checklists', label: '체크리스트', sample: 'keep', carry: {} },
+    { k: 'ranks', label: '검색 순위', sample: 'keep', carry: {} },
+    { k: 'changes', label: '원가·수수료 변경 기록', sample: 'none' }, // 개선 7단계: 과거 이익이 다시 계산되는 원인을 남긴다
+  ];
+  const emptyOf = (ds) => (ds.shape === 'map' ? {} : []);
+  const dsOf = (k) => DATASETS.find((x) => x.k === k);
+  const KEYS = DATASETS.map((x) => x.k);
 
   // 저장된 값을 꺼내는 함수(get)로 화면용 자료를 조립한다 — localStorage·IndexedDB 공통
   function build(get) {
@@ -205,11 +234,17 @@
     let d;
     if (!meta || meta.isSample) {
       d = generateSample();
-      // 예시 데이터라도 사용자가 편집한 소형 목록은 유지
-      if (meta) for (const k of ['vendors', 'pos', 'candidates', 'promotions', 'channels', 'targets', 'compete', 'events', 'checklists', 'ranks']) { const v = get(k, null); if (v) d[k] = v; }
+      // 예시 데이터라도 사용자가 편집한 목록은 유지(SAMPLE_KEEP). sample 표시가 없는 예전 저장분은 예시와 같은 키면 표시를 보완해
+      // 지금부터 고치면 '고친 예시 행'으로 잡히게 한다 (Codex 개선 1단계 R1-02)
+      if (meta) for (const k of SAMPLE_KEEP) {
+        const v = get(k, null); if (!v) continue;
+        const c = CARRY.find((x) => x.k === k && x.key);
+        if (c && Array.isArray(v)) { const keys = new Set((d[k] || []).map((x) => x[c.key])); v.forEach((r) => { if (r && !r.sample && keys.has(r[c.key]) && !(c.touchedOnly && r.userSet && !keys.has(r[c.key]))) r.sample = true; }); }
+        d[k] = v;
+      }
     } else {
       d = { isSample: false };
-      for (const k of KEYS) d[k] = get(k, k === 'closes' ? {} : []);
+      for (const ds of DATASETS) d[ds.k] = get(ds.k, emptyOf(ds));
     }
     MD.store.gen = (meta && meta.gen) || 0; // 여러 탭 덮어쓰기 방지용 저장 세대
     MD.data = d;
@@ -434,7 +469,9 @@
   // 컬렉션을 먼저 쓰고 meta(모드·저장 시각)를 마지막에 쓰며, 하나라도 실패하면 이번에 쓴 키를 이전 문자열로 되돌린다.
   // (meta를 먼저 쓰던 방식은 일부 컬렉션만 저장된 채 남을 수 있었다 — Codex 로드맵 논의 2026-10-31)
   // 결과는 MD.store.lastSave에 남겨 상단 저장 상태 표시·업로드 안내가 읽는다.
-  const SAMPLE_REGEN = ['sales', 'traffic', 'products', 'ads', 'closes']; // 예시는 다시 만들므로 저장하지 않는 키
+  // 예시 모드에서도 저장해 두었다가 다시 불러오는 자료(사용자가 고치거나 만든 것 포함)와 예시로 다시 만드는 자료 — 등록표에서
+  const SAMPLE_KEEP = DATASETS.filter((x) => x.sample === 'keep').map((x) => x.k);
+  const SAMPLE_REGEN = DATASETS.filter((x) => x.sample === 'regen').map((x) => x.k); // 예시는 다시 만들므로 저장하지 않는 키 (상품은 예시 모드 수정을 남기려고 저장 — 개선 1단계)
   const rawGet = (k) => { try { return localStorage.getItem('mdwt:' + k); } catch (e) { return null; } };
   const rawPut = (k, v) => { try { if (v == null) localStorage.removeItem('mdwt:' + k); else localStorage.setItem('mdwt:' + k, v); return true; } catch (e) { return false; } };
   // unsaved: 지난 저장 실패로 메모리에만 남은 키. 다음 저장은 요청한 키와 함께 이 키들도 저장해야 성공으로 본다(R1-02)
@@ -565,7 +602,7 @@
   }
 
   function startEmpty() {
-    MD.data = { isSample: false, channels: [], products: [], sales: [], traffic: [], promotions: [], vendors: [], pos: [], candidates: [], targets: [], ads: [], closes: {}, compete: [], events: [], reports: [], checklists: [], ranks: [] };
+    MD.data = { isSample: false, ...Object.fromEntries(DATASETS.map((ds) => [ds.k, emptyOf(ds)])) };
     save();
   }
 
@@ -580,11 +617,37 @@
     }).filter((o) => TARGET_FIELDS.some((k) => o[k] !== '' && o[k] != null));
   }
 
-  function ensureReal() {
+  // 예시 → 내 데이터 전환 때 가져갈 수 있는 사용자 입력 (개선 1단계 — Codex 논의: 예시에서 자유롭게 연습, 전환 때 보여 주고 선택).
+  // newRows = 사용자가 새로 만든 행, editedRows = 고친 예시 행(고치지 않은 칸에 예시 값이 남아 있음).
+  // 예시 행 판별: sample 표시, 표시가 없는 예전 저장분은 예시와 같은 키(이름·SKU·발주번호·행사 id)로 판단
+  // 전환 후보 규칙은 등록표의 carry에서 (마스터는 손댄 행만 — touchedOnly)
+  const CARRY = DATASETS.filter((x) => x.carry).map((x) => ({ k: x.k, label: x.label, ...x.carry }));
+  function sampleCarry() {
+    const d = MD.data;
+    if (!d.isSample) return [];
+    const fresh = generateSample();
+    return CARRY.map((c) => {
+      const rows = Array.isArray(d[c.k]) ? d[c.k] : [];
+      const sampleKeys = c.key ? new Set((fresh[c.k] || []).map((x) => x[c.key])) : new Set();
+      const isSampleRow = (r) => (c.k === 'events' ? !!r.sample : c.key ? !!r.sample || sampleKeys.has(r[c.key]) : false);
+      const newRows = rows.filter((r) => !isSampleRow(r) && (!c.touchedOnly || r.userSet));
+      const editedRows = rows.filter((r) => isSampleRow(r) && (r.sampleEdited || r.userSet));
+      return { ...c, newRows, editedRows, editedDefault: !!c.editedDefault };
+    }).filter((c) => c.newRows.length || c.editedRows.length);
+  }
+  // choice: { 자료키: { new: bool, edited: bool } }. 없으면 기본값(새로 만든 행은 가져가고, 고친 예시 행은 채널·상품만)
+  function ensureReal(choice) {
     if (!MD.data.isSample) return;
-    const mine = (list) => (list || []).filter((x) => x.userSet);
-    const keep = { vendors: [], pos: [], candidates: [], promotions: [] };
-    MD.data = { isSample: false, channels: mine(MD.data.channels), products: mine(MD.data.products), sales: [], traffic: [], ...keep, targets: realTargets(MD.data.targets), ads: [], closes: {}, compete: [], events: (MD.data.events || []).filter((e) => !e.sample), reports: [], checklists: MD.data.checklists || [], ranks: MD.data.ranks || [] };
+    U.store.del('lastBackupAt'); // 예시 모드 때의 백업 기록은 내 자료 백업이 아니다 — 전환 뒤 실제 자료를 백업하기 전까지 백업 안내가 나오게 (Codex 개선 4단계 R2-01)
+    const carry = Object.fromEntries(sampleCarry().map((c) => [c.k, c]));
+    const pick = (k) => {
+      const c = carry[k]; if (!c) return [];
+      const ch = (choice && choice[k]) || { new: true, edited: c.editedDefault };
+      const clean = (r, fromSample) => { const o = { ...r }; delete o.sample; delete o.sampleEdited; if (fromSample) o.fromSample = true; return o; };
+      return [...(ch.new ? c.newRows.map((r) => clean(r, false)) : []), ...(ch.edited ? c.editedRows.map((r) => clean(r, true)) : [])];
+    };
+    const prev = MD.data;
+    MD.data = { isSample: false, ...Object.fromEntries(DATASETS.map((ds) => [ds.k, ds.carry ? pick(ds.k) : ds.toReal ? ds.toReal(prev[ds.k]) : emptyOf(ds)])) };
   }
 
   MD.buildIndex = function () {
@@ -619,6 +682,17 @@
     return out;
   }
 
+  // 원가·수수료 변경 기록 (개선 7단계 — 원가·수수료 축소안). 계산은 여전히 '현재 값을 기간 전체에 적용'이므로,
+  // 값이 바뀌면 과거 기간 이익도 바뀐다는 사실과 언제 무엇이 바뀌었는지를 남긴다. 예시 데이터에서는 남기지 않는다
+  function logChange(kind, key, oldV, newV) {
+    const d = MD.data;
+    if (d.isSample || oldV === newV || !(Number.isFinite(Number(newV)))) return null;
+    if (!Array.isArray(d.changes)) d.changes = [];
+    const row = { at: new Date().toISOString(), kind, key: String(key), old: oldV == null || oldV === '' ? null : Number(oldV), new: Number(newV) };
+    d.changes.push(row);
+    if (d.changes.length > 2000) d.changes.splice(0, d.changes.length - 2000); // 오래된 기록부터 정리
+    return row;
+  }
   // 계산 기준(로드맵 3순위 '정의 확정'): 공헌이익에 뺄 광고비 출처, 판매 자료의 취소·반품 처리 방식(표시만).
   // 설정은 작아서 localStorage('basis')에 두고(백업 extras에 포함), 집계마다 읽지 않도록 메모리에 둔다
   let basisCache = null;
@@ -644,12 +718,22 @@
     const usedCh = new Set(cur.sales.map((r) => r.channel));
     const noFee = d.channels.filter((c) => usedCh.has(c.name) && !(c.fee > 0)).map((c) => c.name);
     const ordSub = cur.sales.filter((r) => r.ordSrc === 'qty').length;
+    // 이 기간에 판매가 있는 상품·채널의 값이 기간 시작 뒤 바뀌었으면, 그 기간 이익은 바뀐 현재 값으로 다시 계산된 것
+    const pStart = cur.sales.length ? cur.sales[0].date : null;
+    const changedSince = (kind) => {
+      if (!pStart) return '';
+      const keys = new Set(kind === 'cost' ? cur.sales.map((r) => r.sku) : cur.sales.map((r) => r.channel));
+      // 변경 시각(UTC ISO)을 판매일과 같은 현지 날짜로 바꿔 비교 — 한국 오전 9시 전 변경이 전날로 잡히던 문제 (Codex 개선 7단계 R3-02)
+      const localDay = (iso) => { const t = new Date(iso); return isNaN(t) ? '' : `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
+      const list = (d.changes || []).filter((x) => x.kind === kind && keys.has(x.key) && localDay(x.at) >= pStart);
+      return list.length ? `이 기간 시작(${pStart}) 뒤 ${kind === 'cost' ? '원가' : '수수료율'} 변경 ${list.length}건 — 이 기간 이익도 바뀐 값으로 계산됨` : '';
+    };
     return [
       { item: '매출·VAT', rule: '매출은 VAT 포함 실결제액, 순매출 = 매출 ÷ 1.1', fact: '' },
       { item: '취소·반품', rule: RETURNS_TEXT[b.returns] || RETURNS_TEXT[''], fact: '', warn: !b.returns },
       { item: '주문 수', rule: '판매 자료의 주문수 열, 없으면 수량으로 대체', fact: cur.sales.length ? `이 기간 ${U.num(cur.sales.length)}행 중 수량으로 대체 ${U.num(ordSub)}행` : '', warn: ordSub > 0 },
-      { item: '원가', rule: '상품 마스터의 현재 입고원가(VAT 제외)를 기간 전체에 적용', fact: noCost.length ? `원가 0·미등록 상품 ${noCost.length}개(매출 비중 ${U.pct(s.sales ? noCostSales / s.sales : 0)}) — 이익이 부풀려짐` : '판매 상품 모두 원가 입력됨', warn: noCost.length > 0 },
-      { item: '수수료', rule: '채널의 현재 수수료율을 기간 전체에 적용(매출 × 수수료율 ÷ 1.1)', fact: noFee.length ? `수수료 0% 채널 ${noFee.length}개(${noFee.slice(0, 3).join(', ')})` : '', warn: noFee.length > 0 },
+      { item: '원가', rule: '상품 마스터의 현재 입고원가(VAT 제외)를 기간 전체에 적용', fact: [noCost.length ? `원가 0·미등록 상품 ${noCost.length}개(매출 비중 ${U.pct(s.sales ? noCostSales / s.sales : 0)}) — 이익이 부풀려짐` : '판매 상품 모두 원가 입력됨', changedSince('cost')].filter(Boolean).join(' · '), warn: noCost.length > 0 || !!changedSince('cost') },
+      { item: '수수료', rule: '채널의 현재 수수료율을 기간 전체에 적용(매출 × 수수료율 ÷ 1.1)', fact: [noFee.length ? `수수료 0% 채널 ${noFee.length}개(${noFee.slice(0, 3).join(', ')})` : '', changedSince('fee')].filter(Boolean).join(' · '), warn: noFee.length > 0 || !!changedSince('fee') },
       { item: '공헌이익 광고비', rule: b.adSource === 'ads' ? '광고 리포트의 광고비' : '유입 파일의 광고비', fact: `이 기간 유입 파일 ${U.won(s.ad)} · 광고 리포트 ${U.won(s.adSpend)}`, warn: Math.abs(s.ad - s.adSpend) > Math.max(s.ad, s.adSpend) * 0.05 && s.ad > 0 && s.adSpend > 0 },
       { item: '광고 ROAS', rule: '광고 리포트의 광고 매출 ÷ 광고비(광고 매출이 있는 행만)', fact: s.adRevMiss ? `광고 매출 없는 행 ${U.num(s.adRevMiss)}개 제외` : '', warn: false },
     ];
@@ -842,6 +926,8 @@
     return ok;
   }
   const acceptInterrupted = saveAllClearingInterrupted;
-  MD.store = { load, save, resetToSample, startEmpty, ensureReal, generateSample, acceptInterrupted, saveAllClearingInterrupted, recoverLegacy, discardLegacy, legacy: null, lastSave: null, interrupted: null, saving: Promise.resolve(true), gen: 0, KEYS, unsavedKeys: () => [...unsaved], backend: () => (useIDB() ? 'IndexedDB' : 'localStorage') };
-  MD.calc = { basis, setBasis, reloadBasis, basisLines, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, channelRefs, renameChannel };
+  // 저장 결과를 항상 Promise<boolean>으로 — 화면 편집은 '저장 → 실패면 되돌림 → 성공 안내는 성공 때만'을 이 결과로 판단한다 (개선 3단계)
+  const saveP = (keys) => { try { const r = save(keys); return r && typeof r.then === 'function' ? r.then((ok) => ok !== false, () => false) : Promise.resolve(r !== false); } catch (e) { return Promise.resolve(false); } };
+  MD.store = { load, save, saveP, resetToSample, startEmpty, ensureReal, sampleCarry, SAMPLE_KEEP, DATASETS, dsOf, emptyOf, generateSample, acceptInterrupted, saveAllClearingInterrupted, recoverLegacy, discardLegacy, legacy: null, lastSave: null, interrupted: null, saving: Promise.resolve(true), gen: 0, KEYS, unsavedKeys: () => [...unsaved], backend: () => (useIDB() ? 'IndexedDB' : 'localStorage') };
+  MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, channelRefs, renameChannel };
 })();

@@ -99,7 +99,7 @@
         <div class="card-head"><h2>행사 손익분기 시뮬레이터</h2><span class="muted">행사 전에 “얼마나 더 팔아야 본전인가”를 계산</span></div>
         <div class="row end">
           <label class="field">평시 일매출(원)<input type="number" id="sBase" value="${cur && cur.dailyB != null ? Math.round(cur.dailyB) : 3000000}" style="width:140px"></label>
-          <label class="field">평시 이익률(%, 수수료 차감 후)<input type="number" id="sM" value="${cur && cur.baseMargin ? (cur.baseMargin * 100).toFixed(1) : 30}" style="width:90px"></label>
+          <label class="field">평시 이익률(%, 수수료 차감 후)<input type="number" id="sM" value="${cur && cur.baseMargin != null && Number.isFinite(cur.baseMargin) ? (cur.baseMargin * 100).toFixed(1) : 30}" style="width:90px"></label>
           <label class="field">추가 할인율(%)<input type="number" id="sD" value="${cur ? Math.round(cur.discount * 100) : 10}" style="width:80px"></label>
           <label class="field">행사 비용(원)<input type="number" id="sC" value="${cur ? cur.cost : 1000000}" style="width:130px"></label>
           <label class="field">행사 일수<input type="number" id="sN" value="${cur ? cur.days : 3}" style="width:70px"></label>
@@ -128,11 +128,17 @@
       ],
       rows: list, exportName: '프로모션성과',
     });
-    el.querySelector('#tPr').addEventListener('click', (e) => {
+    el.querySelector('#tPr').addEventListener('click', async (e) => {
       const t = e.target;
       if (t.dataset.sel) { e.preventDefault(); sel = t.dataset.sel; MD.rerender(); }
       if (t.dataset.edit) { editing = d.promotions.find((p) => p.id === t.dataset.edit); showForm(); }
-      if (t.dataset.del && confirm('이 행사를 삭제할까요?')) { d.promotions = d.promotions.filter((p) => p.id !== t.dataset.del); MD.store.save(['promotions']); MD.rerender(); }
+      if (t.dataset.del && confirm('이 행사를 삭제할까요?')) {
+        // 저장 결과를 기다려 실패하면 원래 목록으로 되돌린다 (Codex 개선 0단계 R2-01)
+        const keep = d.promotions;
+        d.promotions = d.promotions.filter((p) => p.id !== t.dataset.del);
+        if (!(await MD.store.save(['promotions']))) d.promotions = keep;
+        MD.rerender();
+      }
     });
     el.querySelector('#pNew').onclick = () => { editing = { channel: d.channels[0] && d.channels[0].name, type: '기획전', categories: [] }; showForm(); };
 
@@ -146,6 +152,7 @@
         const v = (n) => f.querySelector(`[name=${n}]`).value;
         if (!v('name') || !v('start') || !v('end')) { U.toast('행사명과 기간을 입력하세요.', 'bad'); return; }
         const rec = { id: editing.id || 'PR' + Date.now().toString(36), name: v('name'), channel: v('channel'), type: v('type'), start: v('start') <= v('end') ? v('start') : v('end'), end: v('start') <= v('end') ? v('end') : v('start'), discount: Number(v('discount')) / 100, budget: Number(v('budget')) || 0, categories: [...f.querySelectorAll('[name=cat]:checked')].map((x) => x.value), memo: v('memo') };
+        if (editing.sample) { rec.sample = true; rec.sampleEdited = true; } // 고친 예시 행사 (개선 1단계)
         const i = d.promotions.findIndex((p) => p.id === rec.id), prev = i >= 0 ? d.promotions[i] : null;
         i >= 0 ? (d.promotions[i] = rec) : d.promotions.push(rec);
         // 저장 결과를 기다려 성공했을 때만 입력을 닫고 안내한다. 실패하면 화면 자료를 되돌리고 입력을 그대로 둬 다시 시도할 수 있게 (Codex 기능 L R3-01)
@@ -170,7 +177,12 @@
     const sim = () => {
       const g = (id) => Number(el.querySelector(id).value) || 0;
       const base = g('#sBase'), m = g('#sM') / 100, disc = g('#sD') / 100, cost = g('#sC'), n = Math.max(1, g('#sN')), up = g('#sU') / 100;
-      const unitM = disc < 1 ? (m - disc) / (1 - disc) : 0; // 할인 후 매출 대비 이익률
+      // 할인율은 0 이상 100% 미만만 계산 — 100%면 아래 이익률 나눗셈이 깨져 원가 손실이 빠진다 (Codex 개선 0단계 R1-01)
+      if (!(Number.isFinite(disc) && disc >= 0 && disc < 1)) {
+        el.querySelector('#sOut').innerHTML = '<div style="grid-column:1/-1;color:var(--bad)">할인율은 0 이상 100% 미만으로 입력하세요(무료 증정은 비용 칸에 원가를 넣어 계산).</div>';
+        return;
+      }
+      const unitM = (m - disc) / (1 - disc); // 할인 후 매출 대비 이익률
       // 이익률은 VAT 제외 순매출 기준이므로 이익 계산은 모두 순매출(÷1.1)로 한다. 비용도 VAT 제외
       const baseNet = base / 1.1;
       const baseProfit = baseNet * m * n;

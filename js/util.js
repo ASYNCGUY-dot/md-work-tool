@@ -136,6 +136,9 @@ MD.util = (function () {
       if (c.t === 'n' && c.z && XLSX.SSF && XLSX.SSF.is_date(c.z)) {
         const p = XLSX.SSF.parse_date_code(c.v);
         if (p) v = `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+        // 서식에 시간이 있으면 시·분을 남긴다(검색 순위 관측시각 등 — Codex 개선 8단계 R3-01). normDate는 'YYYY-MM-DD HH:MM'도 날짜로 읽으므로 날짜 전용 열은 그대로 동작
+        // 자정(00:00)도 서식에 시간이 있으면 그대로 남긴다 (Codex 개선 8단계 R4-01)
+        if (p && /h/i.test(String(c.z).replace(/"[^"]*"/g, ''))) v += ` ${String(p.H).padStart(2, '0')}:${String(p.M).padStart(2, '0')}`;
       } else if (c.t === 'd' && c.v instanceof Date && !isNaN(c.v)) {
         // 이미 Date인 셀: 자정 직전(23:28 등)으로 밀린 값도 같은 날이 되도록 12시간을 더해 로컬 날짜로 반올림
         const t = new Date(c.v.getTime() + 12 * 3600 * 1000);

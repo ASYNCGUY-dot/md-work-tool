@@ -68,7 +68,8 @@
         { key: 'status', label: '상태', type: 'select', options: ['발주', '생산중', '선적', '운송중', '통관대기', '입고완료', '취소'] },
       ],
       list: () => d.pos,
-      onChange: () => { MD.store.save(['pos']); MD.rerender(); },
+      // 저장 결과를 돌려주면 공통 편집기가 실패 시 값·행을 되돌린다. 성공했을 때만 전체를 다시 그림 (개선 3단계)
+      onChange: () => MD.store.saveP(['pos']).then((ok) => { if (ok) MD.rerender(); return ok; }),
       newRow: () => ({ po: 'PO-' + Date.now().toString().slice(-5), vendor: '', sku: d.products[0] ? d.products[0].sku : '', qty: 0, received: 0, ordered: today, eta: U.addDays(today, lead), status: '발주' }),
       extra: (r) => (!closed(r) && r.eta && r.eta < today ? '<span class="tag bad">지연</span>' : ''),
     });

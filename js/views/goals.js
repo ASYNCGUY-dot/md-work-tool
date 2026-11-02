@@ -408,9 +408,9 @@
       if (v != null && !isPct && f !== 'memo' && (!Number.isFinite(v) || v < 0)) { U.toast('0 이상의 금액을 입력하세요. 예: 62,000,000 · 6200만 · 1.2억', 'bad'); inp.value = ''; return; }
       if (isPct && v != null) v = v / 100;
       if (inp.closest('#gChDet')) openCh = true; // 채널별 목표를 고치는 중이면 다시 그려도 펼친 채로
+      const before = d.targets.map((t) => ({ ...t })); // 실패하면 되돌릴 이전 목표 (개선 3단계)
       C.setTarget(inp.dataset.m, inp.dataset.c, f, v);
-      MD.store.save(['targets']);
-      const y = window.scrollY; MD.rerender(); window.scrollTo(0, y);
+      MD.store.saveP(['targets']).then((ok) => { if (!ok) d.targets = before; const y = window.scrollY; MD.rerender(); window.scrollTo(0, y); });
     }));
     el.querySelectorAll('[data-w]').forEach((b) => (b.onclick = () => { wide = b.dataset.w === '1'; MD.rerender(); }));
     el.querySelector('#gYear').onchange = (e) => { year = e.target.value; if (month.slice(0, 4) !== year) month = `${year}-${month.slice(5)}`; MD.rerender(); };
@@ -469,11 +469,16 @@
         const t = orphanTargets[Number(s.dataset.oi)], to = s.value; if (!to) return;
         const ex = C.targetRow(to, t.month);
         if (ex && ex.sales != null && !confirm(`${to} ${t.month}에 이미 목표(${U.won(ex.sales)})가 있습니다. 덮어쓸까요?`)) { s.value = ''; return; }
+        const before = d.targets.map((x) => ({ ...x }));
         d.targets = d.targets.filter((x) => x !== t);
         C.setTarget(t.month, to, 'sales', t.sales ?? null);
-        MD.store.save(['targets']); MD.rerender();
+        MD.store.saveP(['targets']).then((ok) => { if (!ok) d.targets = before; MD.rerender(); });
       }));
-      box.querySelectorAll('[data-od]').forEach((b) => (b.onclick = () => { const t = orphanTargets[Number(b.dataset.od)]; d.targets = d.targets.filter((x) => x !== t); MD.store.save(['targets']); MD.rerender(); }));
+      box.querySelectorAll('[data-od]').forEach((b) => (b.onclick = () => {
+        const t = orphanTargets[Number(b.dataset.od)], before = d.targets;
+        d.targets = d.targets.filter((x) => x !== t);
+        MD.store.saveP(['targets']).then((ok) => { if (!ok) d.targets = before; MD.rerender(); });
+      }));
     }
   };
 })();

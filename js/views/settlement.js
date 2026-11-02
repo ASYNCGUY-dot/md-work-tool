@@ -85,14 +85,14 @@
   }
 
   MD.views.settlement = function (el) {
-    tol = U.store.get('settleTol', 10); dupSum = U.store.get('settleDupSum', false); // 백업 복원 뒤에도 저장된 값으로 (Codex 기능 L R2-01과 같은 문제)
+    tol = Math.max(0, Number(U.store.get('settleTol', 10)) || 0); dupSum = U.store.get('settleDupSum', false); // 백업 복원 뒤에도 저장된 값으로 (Codex 기능 L R2-01과 같은 문제)
     const loadedN = SRC.filter(([k]) => files[k]).length;
     el.innerHTML = `
       <div class="card">
         <div class="card-head"><h2>자료 올리기</h2><button class="btn small" id="sSample">예시 자료로 해보기</button></div>
         <div class="grid g3">${SRC.map(([k, l]) => `<div class="drop" data-k="${k}"><b>${l}</b><br><span class="muted">${files[k] ? `${U.num(files[k].length)}건 불러옴` : 'CSV·엑셀 파일을 끌어다 놓거나 선택'}</span><br><input type="file" accept=".csv,.xlsx,.xls" data-f="${k}" style="margin-top:8px;max-width:100%"></div>`).join('')}</div>
         <div class="note">필요한 열: 주문번호, 채널(쇼핑몰), 금액. 열 이름은 “상품주문번호·결제금액·쇼핑몰명” 같은 흔한 이름을 자동 인식합니다. 두 개 이상 올리면 대사가 시작됩니다.</div>
-        <div class="row" style="margin-top:8px"><label>금액 허용 오차 <input type="number" id="sTol" value="${tol}" style="width:90px"> 원</label></div>
+        <div class="row" style="margin-top:8px"><label>금액 허용 오차 <input type="number" id="sTol" min="0" value="${tol}" style="width:90px"> 원</label></div>
       </div>
       <div id="sResult"></div>`;
 
@@ -110,7 +110,12 @@
       if (!MD.data.maxDate) { U.toast('예시 대사 자료는 판매 데이터에서 만듭니다. 판매 데이터가 없습니다.', 'bad'); return; }
       files = sampleFiles(); MD.rerender();
     };
-    el.querySelector('#sTol').onchange = (e) => { tol = Number(e.target.value) || 0; U.store.set('settleTol', tol); MD.rerender(); };
+    // 허용 오차는 0 이상만 — 음수면 같은 금액도 불일치로 판정된다 (Codex 개선 6단계 R1-02)
+    el.querySelector('#sTol').onchange = (e) => {
+      const v = Number(e.target.value);
+      if (!Number.isFinite(v) || v < 0) { U.toast('허용 오차는 0 이상의 금액으로 입력하세요.', 'bad'); e.target.value = tol; return; }
+      tol = v; U.store.set('settleTol', tol); MD.rerender();
+    };
 
     if (loadedN < 2) return;
     const res = reconcile();

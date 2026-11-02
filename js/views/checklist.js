@@ -26,6 +26,7 @@
   let showDone = false, openId = null;
 
   MD.views.checklist = function (el) {
+    if (MD.state && MD.state.focus && MD.state.focus.view === 'checklist') { openId = MD.state.focus.id; showDone = true; MD.state.focus = null; } // '오늘 확인할 일'에서 이동
     const d = MD.data, today = U.today(), wk = U.addDays(today, 7);
     if (!Array.isArray(d.checklists)) d.checklists = [];
     const lists = d.checklists.map((c) => ({ c, s: MD.checklistStatus(c, today) }));
@@ -77,11 +78,11 @@
               ${c.items.map((i) => {
                 const late = !i.done && i.due && i.due < today, link = safeLink(i.link);
                 return `<tr data-cl="${U.esc(c.id)}" data-it="${U.esc(i.id)}">
-                  <td><input type="checkbox" data-f="done" ${i.done ? 'checked' : ''}></td>
-                  <td><input type="text" data-f="text" value="${U.esc(i.text)}" style="width:100%;min-width:200px${i.done ? ';text-decoration:line-through;color:var(--muted)' : ''}"></td>
-                  <td><input type="text" data-f="owner" value="${U.esc(i.owner || '')}" style="width:90px"></td>
-                  <td><input type="date" data-f="due" value="${U.esc(i.due || '')}"${late ? ' style="color:var(--bad);border-color:var(--bad)"' : ''}>${i.done && typeof i.doneAt === 'string' && i.doneAt ? `<div class="muted" style="font-size:11px">완료 ${U.esc(i.doneAt.slice(0, 10))}</div>` : ''}</td>
-                  <td><input type="text" data-f="link" value="${U.esc(i.link || '')}" placeholder="https://" style="width:160px">${link ? ` <a href="${U.esc(link)}" target="_blank" rel="noopener noreferrer">열기</a>` : i.link ? ' <span class="muted" style="font-size:11px">http(s) 주소만 열 수 있음</span>' : ''}</td>
+                  <td><input type="checkbox" data-f="done" ${i.done ? 'checked' : ''} aria-label="${U.esc(i.text)} 완료"></td>
+                  <td><input type="text" data-f="text" value="${U.esc(i.text)}" aria-label="항목 내용" style="width:100%;min-width:200px${i.done ? ';text-decoration:line-through;color:var(--muted)' : ''}"></td>
+                  <td><input type="text" data-f="owner" value="${U.esc(i.owner || '')}" style="width:90px" aria-label="${U.esc(i.text)} 담당"></td>
+                  <td><input type="date" data-f="due" value="${U.esc(i.due || '')}" aria-label="${U.esc(i.text)} 기한"${late ? ' style="color:var(--bad);border-color:var(--bad)"' : ''}>${i.done && typeof i.doneAt === 'string' && i.doneAt ? `<div class="muted" style="font-size:11px">완료 ${U.esc(i.doneAt.slice(0, 10))}</div>` : ''}</td>
+                  <td><input type="text" data-f="link" value="${U.esc(i.link || '')}" placeholder="https://" style="width:160px" aria-label="${U.esc(i.text)} 증빙 링크">${link ? ` <a href="${U.esc(link)}" target="_blank" rel="noopener noreferrer">열기</a>` : i.link ? ' <span class="muted" style="font-size:11px">http(s) 주소만 열 수 있음</span>' : ''}</td>
                   <td><button class="btn small danger" data-del>삭제</button></td></tr>`;
               }).join('')}
               </tbody></table></div>
