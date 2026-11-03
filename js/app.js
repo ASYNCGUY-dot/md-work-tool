@@ -18,7 +18,7 @@
       ['실적 확인', [['goals', 'shared'], ['insight'], ['channels', 'shared'], ['products'], ['compete'], ['promotions', 'shared']]],
       ['상품·가격 기획', [['pricing'], ['sourcing']]],
       ['운영·마감', [['settlement'], ['vendors'], ['orders'], ['checklist']]],
-      ['보고', [['report', 'unified']]],
+      ['보고', [['report', 'shared']]],
       ['설정', [['data', 'shared']]],
       ['마케팅·광고 바로가기', [['ads'], ['ranks']], 'mkt'],
     ] },
@@ -26,7 +26,7 @@
       ['시작하기', [['ads'], ['guide', 'shared']]],
       ['유입·순위', [['channels', 'shared'], ['ranks']]],
       ['행사·목표', [['promotions', 'shared'], ['goals', 'shared']]],
-      ['보고', [['report', 'unified']]],
+      ['보고', [['report', 'shared']]],
       ['설정', [['data', 'shared']]],
       ['MD 업무 바로가기', [['compete'], ['insight'], ['checklist']], 'md'],
     ] },
@@ -159,7 +159,8 @@
     MD.charts.destroyAll();
     const el = document.getElementById('content');
     const view = MD.views[id];
-    const needsSales = ['dashboard', 'insight', 'channels', 'products', 'promotions', 'report'].includes(id);
+    // 보고서는 화면 안에서 처리 — 광고 보고서는 판매 자료 없이도 열린다 (분리 4단계)
+    const needsSales = ['dashboard', 'insight', 'channels', 'products', 'promotions'].includes(id);
     if (needsSales && !MD.data.sales.length) {
       el.innerHTML = `<div class="card empty">아직 판매 데이터가 없습니다.<br><br><a class="btn primary" href="#data">데이터 관리에서 올리기</a></div>`;
       return;

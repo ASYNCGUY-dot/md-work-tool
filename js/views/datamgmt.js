@@ -373,7 +373,7 @@
         : ['sku', 'device', 'memo', 'date'].some((k) => r[k] != null && typeof r[k] !== 'string') ? '글자 칸' : (fill(r, { date: (x) => x.at.slice(0, 10) }), null);
     },
     changes: (r) => (typeof r.at !== 'string' || isNaN(Date.parse(r.at)) ? '시각' : !['cost', 'fee'].includes(r.kind) ? '종류' : !okText(r.key) ? '대상' : !okNum(r.new) ? '새 값' : r.old != null && !okNum(r.old) ? '이전 값' : null),
-    reports: (r) => (!okText(r.id) ? 'id' : !okText(r.at) ? '저장 시각' : !okDate(r.start) || !okDate(r.end) ? '보고 기간' : typeof r.html !== 'string' ? '본문' : r.notes != null && (!Array.isArray(r.notes) || r.notes.some((n) => !isObj(n) || !okText(n.at) || isNaN(Date.parse(n.at)) || !okText(n.text))) ? '수정 문구' : null),
+    reports: (r) => (!okText(r.id) ? 'id' : !okText(r.at) ? '저장 시각' : !okDate(r.start) || !okDate(r.end) ? '보고 기간' : typeof r.html !== 'string' ? '본문' : r.type != null && r.type !== 'md' && r.type !== 'ad' ? '보고서 종류' : r.notes != null && (!Array.isArray(r.notes) || r.notes.some((n) => !isObj(n) || !okText(n.at) || isNaN(Date.parse(n.at)) || !okText(n.text))) ? '수정 문구' : null),
   };
   const BACKUP_NUMS = [...NUMS, 'received', 'popularity', 'lastYearQty', 'outlook', 'margin', 'moq', 'roas', 'cvr', 'adBudget', 'budget'];
   function checkBackup(j) {
@@ -393,6 +393,11 @@
       }
     }
     if (j.closes !== undefined && (!isObj(j.closes) || Object.values(j.closes).some((c) => c != null && !isObj(c)))) out.push('closes: 형식 아님');
+    // 확인일은 달력에 있는 날짜만 — 날짜가 아닌 값도 '확인됨'으로 읽혀 미확인 자료가 확정 판정에 쓰이던 문제 (Codex 분리 4단계 R1-01)
+    else if (isObj(j.closes)) for (const [ch, c] of Object.entries(j.closes)) {
+      const bad = c && ['sales', 'traffic', 'ads'].find((k) => c[k] != null && c[k] !== '' && !okDate(c[k]));
+      if (bad && out.length < 20) out.push(`closes ${ch}: ${({ sales: '판매', traffic: '유입', ads: '광고 리포트' })[bad]} 확인일 값 오류`);
+    }
     // 마스터의 같은 키는 업로드 전체 교체와 같은 규칙(뒤 행 우선으로 합침)으로 하나로 — 중복 채널은 전사 목표를 이중 집계한다 (Codex 기능 K R3-01)
     if (!out.length) for (const [k, key] of [['channels', 'name'], ['products', 'sku']]) {
       if (!Array.isArray(j[k])) continue;

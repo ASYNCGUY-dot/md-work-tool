@@ -21,7 +21,7 @@
     const promosM = d.promotions.filter((p) => p.start <= monthEnd(M) && p.end >= M + '-01');
     const eventsM = d.events.filter((e) => e.date <= monthEnd(M) && (e.end || e.date) >= M + '-01');
     const mm = Number(M.slice(5)), pm = Number(P.slice(5));
-    const report = { key: 'report', title: '3. 지난달 실적 보고서 확정', how: '보고서 화면에서 기간을 "지난 달"로 두고 인쇄·PDF, 엑셀, 메신저 복사로 공유합니다. 다음 액션 칸을 직접 고치면 그 기간 보고서에 저장됩니다.', href: '#report', action: 'lm',
+    const report = { key: 'report', title: sp === 'mkt' ? '3. 지난달 광고 보고서 확정' : '3. 지난달 MD 실적 보고서 확정', how: `보고서 화면(${sp === 'mkt' ? '광고' : 'MD'} 보고서)에서 기간을 "지난 달"로 두고 인쇄·PDF, 엑셀, 메신저 복사로 공유합니다. 확정본 저장으로 보고 당시 내용을 보관하세요. 다음 액션 칸을 직접 고치면 그 기간 보고서에 저장됩니다.`, href: '#report', action: 'lm', rtype: sp === 'mkt' ? 'ad' : 'md',
       done: null, state: '보고서 열기 버튼은 기간을 지난 달로 맞춰 엽니다' };
     if (sp === 'mkt') {
       // 광고 공간: 유입·광고 리포트 → 마감 → 보고서 → 광고 목표 → 행사 일정
@@ -93,7 +93,7 @@
         <div class="seg" role="group" aria-label="월초 체크 종류"><button data-gk="md" class="${K === 'md' ? 'on' : ''}" aria-pressed="${K === 'md'}">MD 업무</button><button data-gk="mkt" class="${K === 'mkt' ? 'on' : ''}" aria-pressed="${K === 'mkt'}">마케팅·광고</button></div></div>
         <ol class="guide-steps">${list.map((s) => `<li class="${s.done === true ? 'done' : s.done === false ? 'todo' : 'na'}">
           <div class="row"><b>${U.esc(s.title)}</b><span class="tag ${s.done === true ? 'good' : s.done === false ? 'warn' : 'neutral'}">${s.done === true ? '완료' : s.done === false ? '할 일' : '확인'}</span><span class="spacer"></span>
-            <a class="btn small" href="${s.href}" ${s.action ? `data-act="${s.action}"` : ''}${s.focus ? ` data-focus="${s.focus}"` : ''}>${s.action ? '지난 달 보고서 열기' : '바로 가기'}</a></div>
+            <a class="btn small" href="${s.href}" ${s.action ? `data-act="${s.action}" data-rt="${s.rtype || 'md'}"` : ''}${s.focus ? ` data-focus="${s.focus}"` : ''}>${s.action ? '지난 달 보고서 열기' : '바로 가기'}</a></div>
           <div class="muted" style="font-size:12px;margin-top:2px">${U.esc(s.state)}</div>
           <div style="margin-top:4px">${U.esc(s.how)}</div></li>`).join('')}</ol>
       </div>
@@ -116,7 +116,7 @@
     el.querySelectorAll('[data-gk]').forEach((b) => (b.onclick = () => { kind = b.dataset.gk; MD.rerender(); }));
     // 목표 단계는 해당 목표 탭을 열어 준다
     el.querySelectorAll('[data-focus]').forEach((a) => (a.onclick = () => { MD.state.focus = { view: 'goals', id: a.dataset.focus }; }));
-    el.querySelectorAll('[data-act="lm"]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); MD.state.preset = 'lm'; MD.refresh(); location.hash = '#report'; }));
+    el.querySelectorAll('[data-act="lm"]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); MD.state.preset = 'lm'; MD.state.focus = { view: 'report', id: a.dataset.rt }; MD.refresh(); location.hash = '#report'; }));
     if (MD.renderToday) MD.renderToday(el.querySelector('#todayHub')); // '오늘 확인할 일' 허브 (개선 4단계)
   };
 })();
