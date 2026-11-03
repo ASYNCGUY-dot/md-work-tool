@@ -501,6 +501,13 @@
       <ul class="checklist">${items.map((x) => `<li class="${x.done ? 'done' : ''}">${x.done ? U.esc(x.text) : `<a href="${x.href}">${U.esc(x.text)}</a>`}</li>`).join('')}</ul></div>`;
   };
 
+  // 업로드 카드 순서 (분리 5단계): 작업 공간에서 자주 올리는 자료를 앞에. 모든 종류는 양쪽 공간에 그대로 남는다
+  const space = () => (MD.state && MD.state.space) === 'mkt' ? 'mkt' : 'md';
+  const SPACE_UP = {
+    md: { order: ['sales', 'products', 'channels', 'compete', 'traffic', 'ads'], main: ['sales', 'products', 'compete'], note: 'MD 업무 순서: 판매 → 상품 마스터 → 채널 → 경쟁 상품, 그다음 유입·광고 자료. 열 이름은 각 카드의 [열 보기]에서 확인합니다.' },
+    mkt: { order: ['traffic', 'ads', 'sales', 'channels', 'products', 'compete'], main: ['traffic', 'ads'], note: '마케팅·광고 순서: 유입·광고비 → 광고 리포트, 그다음 판매·채널·상품·경쟁 자료(ROAS·매출 비중 계산에 판매·채널 자료도 필요). 열 이름은 각 카드의 [열 보기]에서 확인합니다.' },
+  };
+
   MD.views.data = function (el) {
     const d = MD.data;
     const focus = MD.state && MD.state.focus && MD.state.focus.view === 'data' ? MD.state.focus : null; // '오늘 확인할 일'에서 이동(마감 확인 표 등)
@@ -535,10 +542,12 @@
           <div class="muted" style="font-size:12px;margin:4px 0 8px">시트 이름으로 종류를 구분합니다(채널 → 상품 마스터 → 판매 → 유입 → 광고 → 경쟁 순서로 반영). 아래 개별 양식과 열 이름이 같습니다. 월초에는 이 파일 하나로 올리는 것을 권합니다.</div>
           <div class="row"><select id="uniMode"><option value="merge">추가·갱신</option><option value="replace">전체 교체</option></select><input type="file" accept=".xlsx,.xls" id="uniUp" style="max-width:100%"></div>
         </div>
-        <div class="grid g2">${Object.entries(SPECS).map(([k, s]) => `
+        <div class="muted" style="font-size:12px;margin-bottom:8px">${SPACE_UP[space()].note}</div>
+        <div class="grid g2">${SPACE_UP[space()].order.map((k) => [k, SPECS[k]]).map(([k, s]) => `
           <div class="drop" data-k="${k}" style="text-align:left">
-            <div class="row"><b>${s.label}</b><span class="spacer"></span><button class="btn small" data-tpl="${k}">양식 받기</button></div>
-            <div class="muted" style="font-size:12px;margin:4px 0 8px">${s.desc}<br>열: ${Object.values(s.cols).map((a) => a[0]).join(', ')} (필수: ${s.required.map((r) => s.cols[r][0]).join(', ')})</div>
+            <div class="row"><b>${s.label}</b>${SPACE_UP[space()].main.includes(k) ? ' <span class="tag neutral">자주 올림</span>' : ''}<span class="spacer"></span><button class="btn small" data-tpl="${k}">양식 받기</button></div>
+            <div class="muted" style="font-size:12px;margin:4px 0 8px">${s.desc}
+              <details style="margin-top:4px"><summary>열 ${Object.keys(s.cols).length}개 보기 (필수: ${s.required.map((r) => s.cols[r][0]).join(', ')})</summary>${Object.values(s.cols).map((a) => a[0]).join(', ')}</details></div>
             <div class="row"><select data-mode="${k}"><option value="merge">추가·갱신</option><option value="replace">전체 교체</option></select><input type="file" accept=".csv,.xlsx,.xls" data-up="${k}" style="max-width:100%"></div>
           </div>`).join('')}</div>
         <div id="upMsg" class="note"></div>

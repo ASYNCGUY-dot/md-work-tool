@@ -17,8 +17,10 @@
     const k = Object.keys(row).find((c) => ALIAS[key].some((a) => c.replace(/\s/g, '').toLowerCase() === a.replace(/\s/g, '').toLowerCase()));
     return k ? row[k] : undefined;
   }
+  // 주문번호가 빈 행은 대사할 수 없어 빼되, 값이 있는 행이면 건수·금액·원본 행 번호를 skipped에 남겨 화면에 알린다 (Codex 분리 5단계 R1-01)
   function normalize(rows) {
-    return rows.map((r) => {
+    const skipped = { n: 0, amt: 0, rows: [] };
+    const out = rows.map((r, i) => {
       const rawAmt = String(pick(r, 'amount') ?? '').replace(/[,원\s]/g, '');
       const amount = Number(rawAmt);
       const rawDate = String(pick(r, 'date') ?? '').trim();
@@ -28,8 +30,15 @@
         // 숫자로 읽히지 않는 금액은 0원으로 바꾸지 않고 '금액 오류'로 표시한다
         amount: /\d/.test(rawAmt) && Number.isFinite(amount) ? amount : null,
         date: U.normDate(rawDate) || rawDate.slice(0, 10),
+        filled: Object.values(r).some((v) => String(v ?? '').trim() !== ''), rowNo: i + 1, // 데이터 몇 번째 행인지(빈 줄은 읽을 때 빠져 원본 줄 번호와 다를 수 있음)
       };
-    }).filter((r) => r.order);
+    }).filter((r) => {
+      if (r.order) return true;
+      if (r.filled) { skipped.n++; skipped.amt += r.amount || 0; if (skipped.rows.length < 5) skipped.rows.push(r.rowNo); }
+      return false;
+    }).map(({ filled, rowNo, ...r }) => r);
+    out.skipped = skipped;
+    return out;
   }
 
   // 예시: 최근 한 달 판매 데이터에서 주문 목록을 만들고 일부러 오류를 섞는다
@@ -72,8 +81,8 @@
       const badAmt = present.filter((k) => g[k].bad).map(srcName);
       const dup = dupSum ? [] : present.filter((k) => g[k].n > 1).map(srcName);
       const amts = present.filter((k) => !g[k].bad).map((k) => g[k].amount);
-      // 누락 건은 빠진 금액 전체를 차이로 본다
-      const spread = !amts.length ? 0 : missing.length ? Math.max(...amts) : Math.max(...amts) - Math.min(...amts);
+      // 누락 건은 빠진 금액 전체를 차이로 본다 — 음수(취소·환불) 주문도 금액 크기로, 합계에서 양수 누락과 상쇄되지 않게 (Codex 분리 5단계 R1-02)
+      const spread = !amts.length ? 0 : missing.length ? Math.max(...amts.map(Math.abs)) : Math.max(...amts) - Math.min(...amts);
       const probs = [...badAmt.map((m) => m + ' 금액 오류'), ...dup.map((m) => m + ' 중복 주문번호'), ...missing.map((m) => m + ' 누락')];
       if (!probs.length && spread > tol) probs.push('금액 불일치');
       const status = probs.length ? probs.join(', ') : '일치';
@@ -90,7 +99,7 @@
     el.innerHTML = `
       <div class="card">
         <div class="card-head"><h2>자료 올리기</h2><button class="btn small" id="sSample">예시 자료로 해보기</button></div>
-        <div class="grid g3">${SRC.map(([k, l]) => `<div class="drop" data-k="${k}"><b>${l}</b><br><span class="muted">${files[k] ? `${U.num(files[k].length)}건 불러옴` : 'CSV·엑셀 파일을 끌어다 놓거나 선택'}</span><br><input type="file" accept=".csv,.xlsx,.xls" data-f="${k}" style="margin-top:8px;max-width:100%"></div>`).join('')}</div>
+        <div class="grid g3">${SRC.map(([k, l]) => `<div class="drop" data-k="${k}"><b>${l}</b><br><span class="muted">${files[k] ? `${U.num(files[k].length)}건 불러옴` : 'CSV·엑셀 파일을 끌어다 놓거나 선택'}</span>${files[k] && files[k].skipped && files[k].skipped.n ? `<br><span class="tag warn">주문번호 없는 행 ${U.num(files[k].skipped.n)}개 제외</span>` : ''}<br><input type="file" accept=".csv,.xlsx,.xls" data-f="${k}" style="margin-top:8px;max-width:100%"></div>`).join('')}</div>
         <div class="note">필요한 열: 주문번호, 채널(쇼핑몰), 금액. 열 이름은 “상품주문번호·결제금액·쇼핑몰명” 같은 흔한 이름을 자동 인식합니다. 두 개 이상 올리면 대사가 시작됩니다.</div>
         <div class="row" style="margin-top:8px"><label>금액 허용 오차 <input type="number" id="sTol" min="0" value="${tol}" style="width:90px"> 원</label></div>
       </div>
@@ -131,13 +140,16 @@
         상품별로 행이 나뉜 자료라면 합산해야 맞고, 행마다 주문 총액이 반복된 자료라면 합산하면 안 됩니다. 원본 자료를 확인한 뒤 선택하세요.
         <label style="display:block;margin-top:6px"><input type="checkbox" id="dupSum" ${dupSum ? 'checked' : ''}> 같은 주문번호 행의 금액을 합산 (상품별 행 자료)</label>
       </li></ul></div>` : '';
+    // 주문번호가 없어 대사에서 빠진 행 — 이 행이 있으면 '일치'여도 전체 대사가 끝난 것이 아니다
+    const skip = SRC.filter(([k]) => files[k] && files[k].skipped && files[k].skipped.n).map(([k]) => ({ k, ...files[k].skipped }));
+    const skipNote = skip.length ? `<div class="card" style="margin-top:16px"><ul class="insights"><li class="bad"><b>대사하지 못한 행이 있습니다</b> — 주문번호가 비어 있어 대사와 채널 합계에서 뺀 행: ${skip.map((x) => `${srcName(x.k)} ${U.num(x.n)}개(금액 합계 ${U.won(x.amt)}, 데이터 ${x.rows.join('·')}번째 행${x.n > x.rows.length ? ' 등' : ''})`).join(', ')}. 아래 결과는 이 행을 뺀 나머지만의 결과라 '일치'여도 전체 대사가 끝난 것이 아닙니다. 원본에 주문번호를 채워 다시 올리세요.</li></ul></div>` : '';
     const box = el.querySelector('#sResult');
-    box.innerHTML = `${dupNote}
+    box.innerHTML = `${skipNote}${dupNote}
       <div class="grid g4" style="margin-top:16px">
         <div class="kpi"><div class="k">대사 주문 수</div><div class="v">${U.num(res.length)}</div></div>
-        <div class="kpi"><div class="k">일치</div><div class="v">${U.num(res.length - issues.length)}</div><div class="s">${U.pct((res.length - issues.length) / (res.length || 1))}</div></div>
+        <div class="kpi"><div class="k">일치</div><div class="v">${U.num(res.length - issues.length)}</div><div class="s">${U.pct((res.length - issues.length) / (res.length || 1))}${skip.length ? ` · <span class="tag bad">미처리 ${U.num(skip.reduce((a, x) => a + x.n, 0))}행 별도</span>` : ''}</div></div>
         <div class="kpi"><div class="k">확인 필요</div><div class="v" style="color:var(${issues.length ? '--bad' : '--good'})">${U.num(issues.length)}건</div><div class="s">${[...new Set(issues.map((i) => i.status))].join(' · ') || '없음'}</div></div>
-        <div class="kpi"><div class="k">차이 금액 합계</div><div class="v">${U.won(issues.reduce((a, r) => a + r.diff, 0))}</div><div class="s">누락 건은 해당 주문 금액</div></div>
+        <div class="kpi"><div class="k">차이 금액 합계</div><div class="v">${U.won(issues.reduce((a, r) => a + r.diff, 0))}</div><div class="s">누락 건은 해당 주문 금액(음수 주문도 금액 크기)</div></div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-head"><h2>채널별 합계 대조</h2></div><div id="tC"></div></div>
       <div class="card"><div class="card-head"><h2>주문별 대사 결과</h2><label><input type="checkbox" id="only" ${onlyIssues ? 'checked' : ''}> 확인 필요 건만</label></div><div id="tO"></div></div>`;
