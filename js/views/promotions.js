@@ -10,11 +10,18 @@
     const match = (r) => r.channel === p.channel && (!p.categories || !p.categories.length || p.categories.includes((d.productMap[r.sku] || {}).category));
     const days = U.diffDays(p.start, p.end) + 1;
     const bs = U.addDays(p.start, -BASE_DAYS), be = U.addDays(p.start, -1);
-    const maxD = d.maxDate || '';
+    // 관측 종료일은 행사 채널 기준: 이 채널의 마지막 판매일과 판매 마감 확인일 중 늦은 날 (Codex 분리 3단계 R1-01).
+    // 다른 채널의 더 늦은 판매가 이 채널의 미관측 날짜를 매출 0으로 만들지 않게. 이 채널 판매도 확인일도 없으면 전체 판매 마지막 날
+    let chLast = '';
+    for (let i = d.sales.length - 1; i >= 0; i--) if (d.sales[i].channel === p.channel) { chLast = d.sales[i].date; break; }
+    const chClose = C.closeOf(p.channel, 'sales') || '';
+    const maxD = (chLast || chClose ? (chLast > chClose ? chLast : chClose) : d.maxDate) || '';
+    // 채널 첫 판매일: 기준 자료 시작일과 차트 시작의 하한. 예정 행사(아래 조기 반환)에도 돌려준다 (Codex 분리 3단계 R3-01)
+    const chFirst = (d.sales.find((r) => r.channel === p.channel) || {}).date || d.maxDate || '';
     // 판매 자료의 마지막 날 이후는 아직 관측하지 않은 기간이다. 시작 전 행사는 성과를 계산하지 않고,
     // 진행 중 행사는 지금까지의 일수로만 일평균을 낸다 (없는 날을 매출 0으로 보면 리프트가 -100%가 된다)
     if (p.start > maxD) {
-      return { ...p, days, sales: null, qty: null, gross: null, margin: null, discountAmt: null, dailyA: null, dailyB: null, lift: null, incSales: null, incGross: null, netGain: null, cost: Number(p.budget) || 0, roas: null, iroas: null, cvr: null, prevCvr: null, baseMargin: null, status: '진행/예정', baseFrom: bs };
+      return { ...p, days, sales: null, qty: null, gross: null, margin: null, discountAmt: null, dailyA: null, dailyB: null, lift: null, incSales: null, incGross: null, netGain: null, cost: Number(p.budget) || 0, roas: null, iroas: null, cvr: null, prevCvr: null, baseMargin: null, status: '진행/예정', baseFrom: bs, obsEnd: maxD, chFirst };
     }
     const pEnd = p.end > maxD ? maxD : p.end, obs = U.diffDays(p.start, pEnd) + 1;
     const during = C.inRange(d.sales, p.start, pEnd).filter(match);
@@ -25,7 +32,6 @@
     // 직전 14일이 판매 자료 범위 밖이면 기준 매출을 0으로 보지 않고 판정을 보류한다.
     // 일부만 범위 안이면 기준선은 지금처럼 14일 평균(없는 날 0)으로 두되 화면에 관측 일수를 알린다
     // 자료 시작일은 행사 채널 기준 — 다른 채널에 오래된 판매가 있어도 이 채널 자료가 없던 기간은 기준으로 보지 않는다
-    const chFirst = (d.sales.find((r) => r.channel === p.channel) || {}).date || maxD;
     const baseStart = chFirst > bs ? chFirst : bs;
     const baseDays = baseStart <= be ? U.diffDays(baseStart, be) + 1 : 0;
     const dailyA = a.sales / obs, dailyB = baseDays ? b.sales / BASE_DAYS : null;
@@ -34,7 +40,7 @@
     const incGross = baseDays ? a.gross - (b.gross / BASE_DAYS) * obs : null;
     const netGain = baseDays ? incGross - cost / 1.1 : null;
     // 행사·기준 기간 모두 판매가 없으면 판정하지 않는다. 순증 이익 0은 '본전 근처'
-    const status = p.end > (d.maxDate || '') ? '진행/예정' : !during.length && !base.length ? '자료 없음' : !baseDays ? '기준 자료 없음' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
+    const status = p.end > maxD ? '진행/예정' : !during.length && !base.length ? '자료 없음' : !baseDays ? '기준 자료 없음' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
     // 카테고리를 지정한 행사는 대상 카테고리 주문 ÷ 채널 유입(판매 파일 주문 기준), 아니면 공통 전환율
     const cat = p.categories && p.categories.length;
     return {
@@ -42,7 +48,7 @@
       dailyA, dailyB, lift: dailyB ? dailyA / dailyB - 1 : null, incSales, incGross, netGain, cost,
       roas: cost ? a.sales / cost : null, iroas: cost && incSales != null ? incSales / cost : null,
       cvr: cat ? a.cvrSales : a.cvr, prevCvr: cat ? b.cvrSales : b.cvr, cvrNote: cat ? '대상 카테고리 주문(판매 파일) ÷ 채널 전체 유입' : C.cvrNote(a),
-      baseMargin: baseDays ? b.margin : null, baseDays, status, baseFrom: bs,
+      baseMargin: baseDays ? b.margin : null, baseDays, status, baseFrom: bs, obsEnd: maxD, chFirst,
     };
   };
 
@@ -91,7 +97,7 @@
         <div class="note">기준선 = 같은 채널·대상 카테고리의 행사 직전 ${BASE_DAYS}일 일평균. 증분 매출 = (행사 일평균 − 기준 일평균) × 행사 일수. 순증 이익 = 증분 매출총이익 − 행사 비용(VAT 제외). 다른 행사·시즌 효과가 섞일 수 있으니 참고 지표로 보세요.</div>
       </div>
       ${cur ? `<div class="grid g3">
-        <div class="card span2"><div class="card-head"><h2>${U.esc(cur.name)} 일별 매출</h2><span class="muted">${U.esc(cur.channel)} · ${cur.start} ~ ${cur.end}</span></div>
+        <div class="card span2"><div class="card-head"><h2>${U.esc(cur.name)} 일별 매출</h2><span class="muted">${U.esc(cur.channel)} · ${cur.start} ~ ${cur.end}${cur.obsEnd && cur.obsEnd < cur.end ? ` · 이 채널 자료는 ${cur.obsEnd}까지(이후는 그리지 않음)` : ''}</span></div>
           ${MD.legend([{ label: '기준·이후 기간', color: MD.colorOf(0) }, { label: '행사 기간', color: MD.colorOf(1) }])}
           <div class="chart-box"><canvas id="cPr"></canvas></div></div>
         <div class="card"><div class="card-head"><h2>행사 요약</h2><span class="tag ${cur.status === '성공' ? 'good' : cur.status === '손실' ? 'bad' : 'warn'}">${cur.status}</span></div>
@@ -173,10 +179,11 @@
 
     // 행사 차트: 기준 14일 + 행사 + 이후 7일
     if (cur) {
-      const from = cur.baseFrom, to = U.addDays(cur.end, 7) > d.maxDate ? d.maxDate : U.addDays(cur.end, 7);
+      // 행사 채널이 관측한 범위만 그린다(첫 판매일 ~ 관측 종료일) — 범위 밖 날짜를 0원으로 보이지 않게 (Codex 분리 3단계 R2-01)
+      const from = cur.chFirst && cur.chFirst > cur.baseFrom ? cur.chFirst : cur.baseFrom, after = U.addDays(cur.end, 7), to = after > cur.obsEnd ? cur.obsEnd : after;
       const cats = cur.categories || [];
       const match = (r) => r.channel === cur.channel && (!cats.length || cats.includes((d.productMap[r.sku] || {}).category));
-      const days = U.dateRange(from, to);
+      const days = from <= to ? U.dateRange(from, to) : [];
       const g = U.groupBy(C.inRange(d.sales, from, to).filter(match), (r) => r.date);
       const vals = days.map((x) => (g.get(x) || []).reduce((a, r) => a + r.sales, 0));
       const colors = days.map((x) => (x >= cur.start && x <= cur.end ? MD.colorOf(1) : MD.colorOf(0)));

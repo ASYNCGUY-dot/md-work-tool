@@ -30,12 +30,57 @@
     return z;
   }
 
+  // 오늘 확인할 성과 (분리 3단계): 이번 달 목표 판정(목표 화면의 MD.ratioStatus·MD.goalKpis)과 순위 화면의 급락 기준을 그대로 쓴다.
+  //  - 기준 미달 / 판정 보류 / 집행 없음·목표 미설정을 나눠 보여 준다. 할 일 목록이 아니라 화면을 열어도 해결로 치지 않는다 — 자료·목표가 바뀌면 다시 판정
+  //  - 화면 위의 기간·채널 선택과 무관하게 자료 기준일이 속한 달 기준 (목표 화면과 같은 달)
+  function todayChecks(d) {
+    const m = (d.maxDate || U.today()).slice(0, 7);
+    const bad = [], hold = [], none = [], noTarget = [];
+    const goal = '<a href="#goals" data-adfocus="ad">광고 목표</a>';
+    const rs = MD.ratioStatus(m);
+    if (!rs.upto) return { m, upto: null, bad, hold, none: [`${Number(m.slice(5))}월 자료가 아직 없습니다.`] };
+    const roasLine = (name, r) => {
+      if (r.state === '목표 미달') bad.push(`<b>${U.esc(name)}</b> 광고 ROAS ${MD.ratioText(r, 'roas')} — ${goal}`);
+      else if (r.state === '판정 보류' || r.state === '계산 불가') hold.push(`<b>${U.esc(name)}</b> 광고 ROAS ${MD.ratioTag(r)} ${U.esc(r.why || '')}${r.actual != null ? ` · 참고 ${U.pct(r.actual, 0)}` : ''}`);
+      else if (r.state === '광고 집행 없음') none.push(`${U.esc(name)}: 광고 집행 없음(광고비 확인된 0원)`);
+      else if (r.state === '목표 미설정') noTarget.push(name);
+    };
+    roasLine('전사', rs.roas);
+    for (const c of d.channels) {
+      const r = MD.ratioStatus(m, c.name);
+      // 광고 리포트가 한 번도 없는 채널은 광고를 하지 않는 채널로 보고 뺀다. 그래도 ROAS 목표가 있으면 알린다
+      if (r.roas.state === '광고 리포트 없음') { if (r.roas.target != null) none.push(`${U.esc(c.name)}: ROAS 목표가 있지만 광고 리포트 없음`); continue; }
+      roasLine(c.name, r.roas);
+    }
+    if (noTarget.length) none.push(`ROAS 목표 미설정: ${noTarget.map(U.esc).join(', ')} — ${goal}에서 입력`);
+    const k = MD.goalKpis(m);
+    if (k.budget === 0 && k.spent > 0) bad.push(`광고비 예산 0원인데 ${U.krw(k.spent)}원 지출(${k.spentSrc}) — ${goal}`);
+    else if (k.usage != null && k.usage > k.elapsedShare + 0.05) bad.push(`광고비 예산 사용 ${U.pct(k.usage, 0)} — 월 경과율 ${U.pct(k.elapsedShare, 0)}보다 빠름 (${U.krw(k.spent)}원 / ${U.krw(k.budget)}원, ${k.spentSrc}) — ${goal}`);
+    else if (k.budget == null && k.spent > 0) none.push(`광고비 예산 미설정 (이번 달 지출 ${U.krw(k.spent)}원) — ${goal}에서 입력`);
+    // 순위: 순위 화면 '확인할 순위 변화'와 같은 기준(직전 관측보다 5위 이상 하락 또는 범위 밖으로)
+    const drops = MD.rankSeries ? MD.rankSeries(d.ranks || []).filter((x) => (x.change != null && x.change >= 5) || x.note === '범위 밖으로 하락').sort((a, b) => (a.last.at < b.last.at ? 1 : -1)) : [];
+    const rt = (r) => (r.rank != null ? `${r.rank}위` : '범위 밖');
+    drops.slice(0, 5).forEach((x) => bad.push(`순위 하락 <b>${U.esc(x.last.platform)} '${U.esc(x.last.keyword)}'</b> (${U.esc(x.last.type)}) ${rt(x.prev)} → ${rt(x.last)} · ${U.esc(x.last.at.replace('T', ' '))} 관측${x.diffCond ? ' <span class="muted">(측정 조건 다름)</span>' : ''} — <a href="#ranks">검색 순위</a>`));
+    if (drops.length > 5) bad.push(`순위 하락 ${drops.length - 5}개 더 — <a href="#ranks">검색 순위</a>`);
+    return { m, upto: rs.upto, bad, hold, none };
+  }
+  function todayCard(d) {
+    const t = todayChecks(d);
+    const sec = (title, tone, list) => (list.length ? `<div style="margin-top:8px"><b>${title}</b> <span class="muted">${list.length}건</span><ul class="insights" style="margin-top:6px">${list.map((x) => `<li class="${tone}">${x}</li>`).join('')}</ul></div>` : '');
+    return `<div class="card" id="adToday"><div class="card-head"><h2>오늘 확인할 성과</h2>
+        <span class="muted">${Number(t.m.slice(5))}월 목표 기준${t.upto ? ` · 기준일 ${t.upto}` : ''} · 화면을 열어도 해결로 처리하지 않습니다. 자료·목표가 바뀌면 다시 판정합니다</span></div>
+      ${!t.bad.length && !t.hold.length ? '<div class="muted">기준 미달·판정 보류 항목이 없습니다.</div>' : ''}
+      ${sec('기준 미달', 'bad', t.bad)}${sec('판정 보류 — 자료가 다 확인되기 전이라 미달·이상을 말할 수 없음', 'warn', t.hold)}${sec('집행 없음·목표 미설정', '', t.none)}</div>`;
+  }
+  const bindToday = (el) => el.querySelectorAll('[data-adfocus]').forEach((a) => (a.onclick = () => { MD.state.focus = { view: 'goals', id: a.dataset.adfocus }; }));
+
   MD.views.ads = function (el) {
     const d = MD.data, st = MD.state;
     if (!d.ads.length) {
-      el.innerHTML = `<div class="card"><div class="card-head"><h2>광고 성과</h2></div>
+      el.innerHTML = `${todayCard(d)}<div class="card"><div class="card-head"><h2>광고 성과</h2></div>
         <p>플랫폼 광고 리포트를 올리면 광고 ROAS(광고 매출 ÷ 광고비)를 계산합니다. 노출·클릭·전환수·캠페인 열이 있으면 CTR·CPC·CPA·캠페인별 분석이 자동으로 추가됩니다.</p>
         <a class="btn primary" href="#data">데이터 관리에서 광고 리포트 올리기</a></div>`;
+      bindToday(el);
       return;
     }
     const [cs, ce] = C.compareRange(st.start, st.end, st.cmp);
@@ -71,7 +116,8 @@
     ].filter(Boolean);
 
     el.innerHTML = `
-      <div class="row" style="margin-bottom:12px">
+      ${todayCard(d)}
+      <div class="row" style="margin:16px 0 12px">
         <select id="adCh"><option value="">전체 채널</option>${chs.map((c) => `<option ${c === chFilter ? 'selected' : ''}>${U.esc(c)}</option>`).join('')}</select>
         <span class="muted">${st.start} ~ ${st.end} · 비교 ${cs} ~ ${ce} · 광고 리포트 기준(플랫폼 귀속 매출)</span>
         ${unconf.length ? `<a class="badge bad" href="#data" title="데이터 관리 → 자료 마감 확인">광고 리포트 마감 미확인 ${unconf.length}개 채널</a>` : ''}
@@ -90,6 +136,7 @@
       <div class="note">광고 ROAS는 플랫폼이 광고에 귀속한 매출 기준이라 플랫폼마다 귀속 기간·방식이 다릅니다. 채널 간 비교는 같은 기준끼리만 하세요. 유입 파일의 광고비와 광고 리포트의 광고비가 다르면 대시보드의 '매출÷광고비'와 이 화면의 값이 다를 수 있습니다.</div>`;
 
     el.querySelector('#adCh').onchange = (e) => { chFilter = e.target.value; MD.rerender(); };
+    bindToday(el);
 
     // 일별 추이
     const days = U.dateRange(st.start, st.end);
