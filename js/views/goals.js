@@ -78,10 +78,15 @@
     const elapsedShare = upto ? (U.diffDays(s, upto) + 1) / dim(m) : 0;
     const noCost = cur ? cur.sales.filter((r) => !(Number((d.productMap[r.sku] || {}).cost) > 0)).reduce((a, r) => a + r.sales, 0) : 0;
     const tLast = upto ? (C.inRange(d.traffic, s, upto).slice(-1)[0] || {}).date : null;
+    // 광고비 예산 사용 (개선 2단계): 판매 기준일이 아니라 광고비를 가져온 자료의 기준일까지 — 판매 자료 없이도 계산된다.
+    // 그달 광고 리포트가 있으면 광고 리포트, 없으면 유입 파일 광고비
+    const hasAds = d.ads.some((r) => r.date >= s && r.date <= e);
+    const bSrc = hasAds ? 'ads' : 'traffic', bAs = C.asOfFor(bSrc).date, bAt = bAs && at && at < bAs ? at : bAs;
+    const bUpto = !bAt || bAt < s ? null : bAt > e ? e : bAt;
+    const spent = bUpto ? C.inRange(d[bSrc], s, bUpto).reduce((a, r) => a + ((hasAds ? r.spend : r.ad) || 0), 0) : null;
     return {
-      // 광고비는 광고 리포트 기준, 리포트가 없을 때만 유입 파일 광고비
-      budget: t.adBudget ?? null, spentSrc: cur && cur.sum.adRows ? '광고 리포트' : '유입 파일', spent: cur ? (cur.sum.adRows ? cur.sum.adSpend : cur.sum.ad) : null,
-      usage: t.adBudget ? (cur ? (cur.sum.adRows ? cur.sum.adSpend : cur.sum.ad) : 0) / t.adBudget : null, elapsedShare,
+      budget: t.adBudget ?? null, spentSrc: hasAds ? '광고 리포트' : '유입 파일', spent, budgetUpto: bUpto,
+      usage: t.adBudget ? (spent || 0) / t.adBudget : null, elapsedShare: bUpto ? (U.diffDays(s, bUpto) + 1) / dim(m) : 0,
       marginTarget: t.margin ?? null, margin: cur ? cur.sum.margin : null, noCost, noCostHold: cur && cur.sum.sales ? noCost / cur.sum.sales >= 0.01 : false, trafficTo: tLast, upto, memo: t.memo || '', updatedAt: t.updatedAt || null,
     };
   };
@@ -91,8 +96,9 @@
   //  - 전환율 = 유입 파일의 주문 건수(플랫폼 통계) ÷ 방문수. 판매 파일의 주문수는 상품 행 합계라 참고값만
   //  - 판정은 필요한 값이 1일~기준일 모든 날 확인됨 + [자료 마감 확인]의 확인일이 기준일 이후일 때만
   //  - 비율 목표는 일수 배분하지 않고, 채널 목표가 없으면 전사 목표를 대신 쓰지 않는다
-  function chRatio(ch, s, upto) {
-    const d = MD.data, days = upto ? U.dateRange(s, upto) : [];
+  // uptoT: 유입 자료 기준일(전환율), uptoA: 광고 리포트 기준일(ROAS), m: 그 달(광고 대상 판단)
+  function chRatio(ch, s, uptoT, uptoA, m) {
+    const d = MD.data, upto = uptoT, days = upto ? U.dateRange(s, upto) : [], daysA = uptoA ? U.dateRange(s, uptoA) : [];
     const tClose = C.closeOf(ch, 'traffic'), aClose = C.closeOf(ch, 'ads');
     // 유입: 날짜별 합산과 확인 표시 (true 확인 · false 파일에 값 없음 · undefined 표시 전 옛 자료)
     const day = new Map();
@@ -113,22 +119,27 @@
     }
     const tUnconf = days.filter((x) => !tClose || x > tClose).length;
     // 광고 리포트
-    const adRows = upto ? C.inRange(d.ads, s, upto).filter((r) => r.channel === ch) : [];
+    const adRows = uptoA ? C.inRange(d.ads, s, uptoA).filter((r) => r.channel === ch) : [];
     const spend = adRows.reduce((a, r) => a + r.spend, 0);
     const revMiss = adRows.filter((r) => (r.miss || []).includes('revenue')).length;
     const revenue = adRows.reduce((a, r) => a + (r.revenue || 0), 0);
-    const everAds = d.ads.some((r) => r.channel === ch); // 광고 리포트가 한 번도 없으면 광고 안 하는 채널로 본다
-    const aUnconf = everAds ? days.filter((x) => !aClose || x > aClose).length : 0;
+    // 광고 대상 (개선 2단계): 그달 광고 리포트가 있거나 그달 ROAS 목표가 있는 채널. '한 번이라도 리포트가 있던 채널'로 보면
+    // 이번 달 리포트를 아직 안 올린 광고 채널이 빠진 채 전사 성과처럼 보인다
+    const e = monthEnd(m), monthAds = d.ads.some((r) => r.channel === ch && r.date >= s && r.date <= e);
+    const roasTarget = (C.targetRow(ch, m) || {}).roas != null;
+    const adTarget = monthAds || roasTarget;
+    const aUnconf = adTarget ? daysA.filter((x) => !aClose || x > aClose).length : 0;
     const rows = upto ? C.inRange(d.sales, s, upto).filter((r) => r.channel === ch) : [];
     const sales = rows.reduce((a, r) => a + r.sales, 0), saleOrders = rows.reduce((a, r) => a + (r.orders || r.qty), 0);
     return {
-      ch, days: days.length, spend, revenue, adRows: adRows.length, revMiss, everAds, aClose, aUnconf, tClose, tUnconf,
+      ch, days: days.length, daysA: daysA.length, spend, revenue, adRows: adRows.length, revMiss, adTarget, monthAds, roasTarget, aClose, aUnconf, tClose, tUnconf,
       ad: tAd, visits, orders, sales, saleOrders, miss, unk,
-      roasOk: everAds && !aUnconf && !revMiss, cvrOk: !miss.v && !unk.v && !miss.o && !unk.o && !tUnconf,
+      roasOk: adTarget && monthAds && !!uptoA && !aUnconf && !revMiss, cvrOk: !!upto && !miss.v && !unk.v && !miss.o && !unk.o && !tUnconf,
     };
   }
   const unconfText = (close, n, name) => (close ? `${name} ${close} 이후 ${n}일 마감 미확인` : `${name} 마감 미확인`);
   function roasWhy(x) {
+    if (!x.monthAds) return '이번 달 광고 리포트 없음(ROAS 목표가 있는 채널)';
     if (x.aUnconf) return unconfText(x.aClose, x.aUnconf, '광고 리포트');
     if (x.revMiss) return `광고 매출이 빈 행 ${x.revMiss}개`;
     return '';
@@ -148,36 +159,54 @@
   }
 
   // 채널 하나 또는 전사(channel = null)의 광고 ROAS·전환율 판정. at: 기준일(보고서용)
+  // 지표별 기준일 (개선 2단계): ROAS는 광고 리포트, 전환율은 유입 자료의 기준일(C.asOfFor — 판매 기준일과 같은 규칙).
+  // 판매 자료가 없어도 광고·유입 자료만으로 판정한다. 반환 upto = ROAS 기준일, cvrUpto = 전환율 기준일
+  const clipTo = (asOf, at, s, e) => { const a = asOf && at && at < asOf ? at : asOf; return !a || a < s ? null : a > e ? e : a; };
+  const span = (s, upto) => (upto ? `${s.slice(5).replace('-', '/')}~${upto.slice(5).replace('-', '/')}` : '');
   MD.ratioStatus = function (m, channel, at) {
-    const d = MD.data, base = C.salesAsOf().date, asOf = at && base && at < base ? at : base;
-    const s = monthStart(m), e = monthEnd(m);
-    const upto = !asOf || asOf < s ? null : asOf > e ? e : asOf;
-    const final = upto === e;
+    const d = MD.data, s = monthStart(m), e = monthEnd(m);
+    const aAs = C.asOfFor('ads'), tAs = C.asOfFor('traffic');
+    const uptoA = clipTo(aAs.date, at, s, e), uptoT = clipTo(tAs.date, at, s, e);
     const t = C.targetRow(channel || '', m) || {};
-    if (!upto) return { upto, final, roas: { state: '시작 전', tone: 'neutral', target: t.roas ?? null }, cvr: { state: '시작 전', tone: 'neutral', target: t.cvr ?? null } };
+    // 그 자료가 아예 없으면 '자료 없음', 있지만 이 달이 아직이면 '시작 전'
+    const before = (as, name) => ({ state: !as.date ? `${name} 없음` : '시작 전', tone: 'neutral' });
+    // final = ROAS(광고 리포트)가 월말까지, cvrFinal = 전환율(유입 자료)이 월말까지 — 지표마다 따로 (Codex 개선 2단계 R2-01)
+    const base = { upto: uptoA, cvrUpto: uptoT, final: uptoA === e, cvrFinal: uptoT === e };
     if (channel) {
-      const x = chRatio(channel, s, upto);
-      const na = !x.everAds ? '광고 리포트 없음' : x.roasOk && x.spend === 0 ? '광고 집행 없음' : null;
-      const roas = judge(x.spend > 0 ? x.revenue / x.spend : null, t.roas ?? null, x.roasOk, roasWhy(x), na);
-      const cvr = judge(x.cvrOk && x.visits > 0 ? x.orders / x.visits : null, t.cvr ?? null, x.cvrOk, cvrWhy(x), x.cvrOk && x.visits === 0 ? '방문 0 — 계산 불가' : null);
-      if (!x.cvrOk && x.visits > 0) cvr.ref = (!x.miss.o && !x.unk.o ? x.orders : x.saleOrders) / x.visits;
-      return { upto, final, x, roas, cvr };
+      const x = chRatio(channel, s, uptoT, uptoA, m);
+      const na = !x.adTarget ? '광고 리포트 없음' : x.roasOk && x.spend === 0 ? '광고 집행 없음' : null;
+      const roas = !uptoA ? { ...before(aAs, '광고 리포트'), target: t.roas ?? null } : judge(x.spend > 0 ? x.revenue / x.spend : null, t.roas ?? null, x.roasOk, roasWhy(x), na);
+      const cvr = !uptoT ? { ...before(tAs, '유입 자료'), target: t.cvr ?? null } : judge(x.cvrOk && x.visits > 0 ? x.orders / x.visits : null, t.cvr ?? null, x.cvrOk, cvrWhy(x), x.cvrOk && x.visits === 0 ? '방문 0 — 계산 불가' : null);
+      if (uptoT && !x.cvrOk && x.visits > 0) cvr.ref = (!x.miss.o && !x.unk.o ? x.orders : x.saleOrders) / x.visits;
+      return { ...base, x, roas, cvr };
     }
-    // 전사: 판매·유입·광고 자료가 있는 모든 채널(목록에 없는 채널 포함)
-    const names = new Set([...C.inRange(d.sales, s, upto).map((r) => r.channel), ...C.inRange(d.traffic, s, upto).map((r) => r.channel), ...C.inRange(d.ads, s, upto).map((r) => r.channel)]);
-    const xs = [...names].map((c) => chRatio(c, s, upto));
-    const adCh = xs.filter((x) => x.everAds), adBad = adCh.filter((x) => !x.roasOk);
-    const okAd = adCh.filter((x) => x.roasOk);
-    const sumS = okAd.reduce((a, x) => a + x.spend, 0), sumR = okAd.reduce((a, x) => a + x.revenue, 0);
-    const roas = judge(sumS ? sumR / sumS : null, t.roas ?? null, !adBad.length, `광고 리포트 미확인 채널: ${adBad.map((x) => `${x.ch}(${roasWhy(x)})`).join(', ')}`,
-      !adCh.length ? '광고 리포트 없음' : !adBad.length && sumS === 0 ? '광고 집행 없음' : null);
-    roas.scope = `광고 리포트 ${okAd.length}개 채널 합계${adBad.length ? ` (미확인 ${adBad.length}개 제외한 참고값)` : ''}`;
-    roas.channels = okAd.map((x) => x.ch);
-    const okC = xs.filter((x) => x.cvrOk), badC = xs.filter((x) => !x.cvrOk);
-    const ov = okC.reduce((a, x) => a + x.visits, 0), oo = okC.reduce((a, x) => a + x.orders, 0);
-    const cvr = judge(ov ? oo / ov : null, t.cvr ?? null, !badC.length, `주문 건수·방문수 미확인 채널: ${badC.map((x) => x.ch).join(', ')}`);
-    cvr.scope = badC.length ? `확인된 ${okC.length}개 채널 합계 (참고값)` : `${okC.length}개 채널 합계`;
-    return { upto, final, xs, roas, cvr };
+    // 전사: 그달 판매·유입·광고 자료가 있는 채널과 ROAS 목표가 있는 채널(목록에 없는 채널 포함)
+    const inM = (list) => list.filter((r) => r.date >= s && r.date <= e).map((r) => r.channel);
+    const dataNames = new Set([...inM(d.sales), ...inM(d.traffic), ...inM(d.ads)]);
+    const names = new Set([...dataNames, ...d.targets.filter((x) => x.month === m && x.channel && x.roas != null).map((x) => x.channel)]);
+    const xs = [...names].map((c) => chRatio(c, s, uptoT, uptoA, m));
+    let roas;
+    if (!uptoA) roas = { ...before(aAs, '광고 리포트'), target: t.roas ?? null };
+    else {
+      const adCh = xs.filter((x) => x.adTarget), adBad = adCh.filter((x) => !x.roasOk);
+      const okAd = adCh.filter((x) => x.roasOk);
+      const sumS = okAd.reduce((a, x) => a + x.spend, 0), sumR = okAd.reduce((a, x) => a + x.revenue, 0);
+      roas = judge(sumS ? sumR / sumS : null, t.roas ?? null, !adBad.length, `광고 리포트 미확인 채널: ${adBad.map((x) => `${x.ch}(${roasWhy(x)})`).join(', ')}`,
+        !adCh.length ? '광고 리포트 없음' : !adBad.length && sumS === 0 ? '광고 집행 없음' : null);
+      // 결과 옆에 기간·포함 채널·마감 상태 (보고서·복사·엑셀에도 이 문구가 따라간다)
+      roas.scope = `${span(s, uptoA)} · 광고 대상 ${adCh.length}개 채널 중 ${okAd.length}개 합계${adBad.length ? ` (미확인 ${adBad.length}개 제외한 참고값)` : ''}${aAs.confirmed ? '' : ' · 광고 리포트 마감 미확인 있음'}`;
+      roas.channels = okAd.map((x) => x.ch);
+    }
+    let cvr;
+    if (!uptoT) cvr = { ...before(tAs, '유입 자료'), target: t.cvr ?? null };
+    else {
+      const cx = xs.filter((x) => dataNames.has(x.ch)); // 전환율은 이전과 같이 그달 자료가 있는 채널 전체 (ROAS 목표만 있는 채널은 제외)
+      const okC = cx.filter((x) => x.cvrOk), badC = cx.filter((x) => !x.cvrOk);
+      const ov = okC.reduce((a, x) => a + x.visits, 0), oo = okC.reduce((a, x) => a + x.orders, 0);
+      cvr = judge(ov ? oo / ov : null, t.cvr ?? null, !badC.length, `주문 건수·방문수 미확인 채널: ${badC.map((x) => x.ch).join(', ')}`);
+      cvr.scope = `${span(s, uptoT)} · ${badC.length ? `확인된 ${okC.length}개 채널 합계 (참고값)` : `${okC.length}개 채널 합계`}`;
+    }
+    return { ...base, xs, roas, cvr };
   };
   // "534% / 목표 500% · +34%p" 형식. 판정은 반올림 전 값으로 하므로, 차이가 작으면 자릿수를 늘린다
   MD.ratioText = function (r, kind) {
@@ -225,9 +254,11 @@
 
   MD.views.goals = function (el) {
     const d = MD.data;
-    const asOf = d.maxDate || U.today();
+    // 기준 달: 판매 자료 기준일, 판매 자료가 없으면 광고 리포트·유입 자료의 마지막 날 (광고만 쓰는 경우)
+    const aLast = C.asOfFor('ads').last, tLast = C.asOfFor('traffic').last;
+    const asOf = d.maxDate || aLast || tLast || U.today(), seenKey = [d.maxDate, aLast, tLast].join('|');
     // 자료가 바뀌면(업로드·복원·예시 전환) 기준 달을 새 자료 기준일의 달로 되돌린다
-    if (!month || seenMax !== d.maxDate) { month = ym(asOf); year = month.slice(0, 4); seenMax = d.maxDate; }
+    if (!month || seenMax !== seenKey) { month = ym(asOf); year = month.slice(0, 4); seenMax = seenKey; }
     const sp = (MD.state && MD.state.space) || 'md';
     if (seenSpace !== sp) { tab = null; seenSpace = sp; }
     if (MD.state && MD.state.focus && MD.state.focus.view === 'goals') { tab = MD.state.focus.id === 'ad' ? 'ad' : 'md'; MD.state.focus = null; } // 월초 체크에서 들어온 경우
@@ -255,7 +286,7 @@
         <button class="btn small" id="gPrev" aria-label="이전 달">◀</button>
         <b style="font-size:16px">${month.slice(0, 4)}년 ${label(month)}</b>
         <button class="btn small" id="gNext" aria-label="다음 달">▶</button>
-        <span class="muted">실적 기준일 ${st.upto || '-'} (${st.confirmed ? '판매 자료 마감 확인일' : '판매 자료 마지막 날'})</span>
+        ${T === 'ad' ? `<span class="muted">ROAS 기준일 ${rs.upto || '-'} (광고 리포트) · 전환율 기준일 ${rs.cvrUpto || '-'} (유입 자료) · 예산 사용 ${k.budgetUpto || '-'}까지(${k.spentSrc})</span>` : `<span class="muted">실적 기준일 ${st.upto || '-'} (${st.confirmed ? '판매 자료 마감 확인일' : '판매 자료 마지막 날'})</span>`}
         ${!st.confirmed && st.unconfirmed.length ? `<a class="badge bad" href="#data" title="데이터 관리 → 자료 마감 확인">판매 마감 미확인 ${st.unconfirmed.length}개 채널</a>` : ''}
         <span class="muted" title="${U.won(yt.actual)} / 연간 목표 ${U.won(yt.annual)}">· ${month.slice(0, 4)}년 누적 ${yt.annual ? U.pct(yt.actual / yt.annual) : '-'} (기준일까지 계획 대비 ${yt.plan ? U.pct(yt.actual / yt.plan) : '-'}${yt.partial ? ', 1월 자료 일부 없음' : ''}${yt.unsetMonths ? `, 목표 없는 달 ${yt.unsetMonths}개` : ''})</span>
         ${stale != null && stale > 3 ? `<span class="badge bad">자료가 오늘보다 ${stale}일 늦음</span>` : ''}
@@ -284,7 +315,7 @@
           <div class="s" style="margin-top:2px">${U.esc(rs.roas.scope || '')} · 플랫폼 광고 리포트 기준 · <a href="#ads">광고 성과</a></div></div>
         <div class="kpi"><div class="k">전환율 (주문 건수 ÷ 방문)</div><div class="v">${rs.cvr.actual == null ? '-' : U.pct(rs.cvr.actual, 2)}</div>
           <div class="s">${MD.ratioTag(rs.cvr)} ${rs.cvr.target != null ? `목표 ${U.pct(rs.cvr.target, 2)}${rs.cvr.diff != null ? ` · ${MD.ratioText(rs.cvr, 'cvr').split(' · ')[1]}` : ''}` : ''}</div>
-          <div class="s" style="margin-top:2px">${U.esc(rs.cvr.scope || '')}${rs.final ? ' · 월 최종' : ' · 월 누적'}</div></div>
+          <div class="s" style="margin-top:2px">${U.esc(rs.cvr.scope || '')}${rs.cvrFinal ? ' · 월 최종' : ' · 월 누적'}</div></div>
         ${budgetKpi}
       </div>`}
       ${T === 'ad' && (rs.roas.tone === 'hold' || rs.cvr.tone === 'hold') ? `<div class="note">판정 보류 사유 — ${[rs.roas.tone === 'hold' ? `ROAS: ${U.esc(rs.roas.why)}` : '', rs.cvr.tone === 'hold' ? `전환율: ${U.esc(rs.cvr.why)}` : ''].filter(Boolean).join(' / ')}</div>` : ''}
@@ -301,7 +332,7 @@
       <div class="card"><div class="card-head"><h2>채널별 달성 현황</h2><span class="muted">기준일까지 부족액이 큰 순</span></div><div id="gCh"></div>
         <div class="note">부족액 = 기준일까지 계획 − 누적 실적. 비율보다 금액 영향이 큰 채널부터 보세요. 매출 미달을 곧바로 광고 확대로 잇지 말고 이익률·광고비·품절·행사를 함께 확인하세요.</div></div>` : `
 
-      <div class="card" style="margin-top:16px"><div class="card-head"><h2>채널별 광고 ROAS·전환율</h2><span class="muted">${rs.final ? '월 최종' : `${month.slice(5)}/1 ~ ${(rs.upto || '').slice(5).replace('-', '/')} 누적`} · 채널 목표가 없으면 전사 목표로 판정하지 않음</span></div><div id="gRatio"></div>
+      <div class="card" style="margin-top:16px"><div class="card-head"><h2>채널별 광고 ROAS·전환율</h2><span class="muted">ROAS ${rs.final ? '월 최종' : `${(rs.upto || '-').slice(5).replace('-', '/')}까지 누적`} · 전환율 ${rs.cvrFinal ? '월 최종' : `${(rs.cvrUpto || '-').slice(5).replace('-', '/')}까지 누적`} · 채널 목표가 없으면 전사 목표로 판정하지 않음</span></div><div id="gRatio"></div>
         <div class="note">광고 ROAS = 광고 리포트의 광고 매출 ÷ 광고비. 전환율 = 유입 파일의 주문 건수 ÷ 방문수. 판매 파일의 주문수는 상품 행마다 세어 한 주문이 여러 번 셀 수 있어 '참고'로만 보여 줍니다. 판정은 [데이터 관리 → 자료 마감 확인]의 확인일까지 자료가 있을 때만 합니다.</div></div>`}
 
       <div class="card" id="gInput">
@@ -378,8 +409,8 @@
     MD.table(el.querySelector('#gRatio'), {
       cols: [
         { key: 'name', label: '채널', html: true, fmt: (v) => `<a href="#channels" data-ch="${U.esc(v)}">${U.esc(v)}</a>`, xfmt: (v) => v },
-        { key: 'spend', label: '광고비(리포트)', num: true, money: true, fmt: (v, r) => (r.everAds ? U.krw(v) : '-'), xfmt: (v) => v },
-        { key: 'revenue', label: '광고 매출', num: true, money: true, fmt: (v, r) => (r.everAds ? U.krw(v) : '-'), xfmt: (v) => v },
+        { key: 'spend', label: '광고비(리포트)', num: true, money: true, fmt: (v, r) => (r.adTarget ? U.krw(v) : '-'), xfmt: (v) => v },
+        { key: 'revenue', label: '광고 매출', num: true, money: true, fmt: (v, r) => (r.adTarget ? U.krw(v) : '-'), xfmt: (v) => v },
         { key: 'roasA', label: 'ROAS 실적 / 목표', num: true, html: true, fmt: (v, r) => MD.ratioText(r.roas, 'roas'), xfmt: (v, r) => (r.roas.actual == null ? '' : r.roas.actual) },
         { key: 'roasS', label: 'ROAS 판정', html: true, fmt: (v, r) => MD.ratioTag(r.roas) + (r.roas.why ? `<br><span class="muted" style="font-size:11px">${U.esc(r.roas.why)}</span>` : ''), xfmt: (v, r) => r.roas.state + (r.roas.why ? ` (${r.roas.why})` : '') },
         { key: 'visits', label: '방문', num: true, fmt: (v) => (v == null ? '-' : U.num(v)) },

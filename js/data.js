@@ -752,10 +752,11 @@
     }
     // 전환율은 유입 파일의 플랫폼 주문 건수 ÷ 방문수(기능 E 결정). 판매 파일 주문수는 상품 행마다 중복될 수 있어 참고값
     // 요약 값은 모두 숫자로 둔다(백업 시험 계산이 문자열을 오류로 본다) — 기준 설명은 cvrNote(z)로 만든다
-    z.pOrders = 0; z.pVisits = 0; z.tRows = 0; z.tOrdRows = 0;
+    z.pOrders = 0; z.pVisits = 0; z.tRows = 0; z.tOrdRows = 0; z.tOrdAny = 0;
     for (const t of traffic || []) {
       z.ad += t.ad || 0; z.visits += t.visits || 0; z.tRows++;
       // 방문 빈칸(vOk=false) 행은 주문이 있어도 분자·분모 모두에서 뺀다 (Codex 분리 1단계 R2-01)
+      if (t.ordOk && t.orders != null) z.tOrdAny++; // 플랫폼 주문 수가 있는 행 (방문 빈칸 여부와 무관)
       if (t.ordOk && t.vOk !== false && t.orders != null) { z.pOrders += t.orders; z.pVisits += t.visits || 0; z.tOrdRows++; }
     }
     z.adSpend = 0; z.adRev = 0; z.adRevSpend = 0; z.adRows = 0; z.adRevMiss = 0;
@@ -772,7 +773,8 @@
     z.roas = z.adRevSpend ? z.adRev / z.adRevSpend : null;
     z.salesPerAd = z.ad ? z.sales / z.ad : null; // 예전 정의(전체 매출 ÷ 유입 파일 광고비) — 참고용
     z.cvrSales = z.visits ? z.orders / z.visits : null;
-    z.cvr = z.tOrdRows ? (z.pVisits ? z.pOrders / z.pVisits : null) : z.cvrSales; // 플랫폼 주문 수가 없으면 판매 주문수 기준 참고값
+    // 플랫폼 주문 수 열 자체가 없을 때만 판매 주문수 기준 참고값. 주문 수는 있는데 그 행이 모두 방문 빈칸이면 계산 불가 (Codex 개선 2단계 R1-01)
+    z.cvr = z.tOrdRows ? (z.pVisits ? z.pOrders / z.pVisits : null) : z.tOrdAny ? null : z.cvrSales;
     z.aov = z.orders ? z.sales / z.orders : null;
     return z;
   }
@@ -781,6 +783,7 @@
   function cvrNote(z) {
     if (!z) return '';
     if (z.tOrdRows) return z.tOrdRows === z.tRows ? '플랫폼 주문 ÷ 방문' : '플랫폼 주문 ÷ 방문(주문·방문 수가 모두 있는 유입 행만)';
+    if (z.tOrdAny) return '계산 불가: 플랫폼 주문 수가 있는 유입 행이 모두 방문수 빈칸';
     return z.visits ? '참고값: 판매 파일 주문 ÷ 방문(유입 파일에 플랫폼 주문 수 없음)' : '';
   }
 
@@ -839,6 +842,20 @@
     if (unconfirmed.length) return { date: d.maxDate, confirmed: false, unconfirmed };
     const min = chs.map((c) => closeOf(c, 'sales')).sort()[0];
     return { date: min < d.maxDate ? min : d.maxDate, confirmed: true, unconfirmed: [] };
+  }
+
+  // 자료 종류별 기준일 (개선 2단계): 판매 기준일(salesAsOf)과 같은 규칙을 유입(traffic)·광고 리포트(ads)에도.
+  // 그 자료가 있는 모든 채널이 마감 확인이면 공통 확인일(가장 이른 확인일, 자료 마지막 날을 넘지 않음), 하나라도 미확인이면 자료 마지막 날.
+  // channels를 주면 그 채널들만 본다(목표 판정의 대상 채널). 자료가 없으면 date: null
+  function asOfFor(src, channels) {
+    const d = MD.data, rows = (d[src] || []).filter((r) => !channels || channels.includes(r.channel));
+    if (!rows.length) return { date: null, last: null, confirmed: false, unconfirmed: [] };
+    const last = rows.reduce((a, r) => (r.date > a ? r.date : a), rows[0].date); // 유입·광고 자료는 날짜순 정렬을 가정하지 않는다
+    const chs = [...new Set(rows.map((r) => r.channel))];
+    const unconfirmed = chs.filter((c) => !closeOf(c, src));
+    if (unconfirmed.length) return { date: last, last, confirmed: false, unconfirmed };
+    const min = chs.map((c) => closeOf(c, src)).sort()[0];
+    return { date: min < last ? min : last, last, confirmed: true, unconfirmed: [] };
   }
 
   // 채널명 변경: 채널을 이름으로 연결하므로 판매·유입·광고·목표·행사·마감 확인의 이름도 함께 바꾼다
@@ -944,5 +961,5 @@
   // 저장 결과를 항상 Promise<boolean>으로 — 화면 편집은 '저장 → 실패면 되돌림 → 성공 안내는 성공 때만'을 이 결과로 판단한다 (개선 3단계)
   const saveP = (keys) => { try { const r = save(keys); return r && typeof r.then === 'function' ? r.then((ok) => ok !== false, () => false) : Promise.resolve(r !== false); } catch (e) { return Promise.resolve(false); } };
   MD.store = { load, save, saveP, resetToSample, startEmpty, ensureReal, sampleCarry, SAMPLE_KEEP, DATASETS, dsOf, emptyOf, generateSample, acceptInterrupted, saveAllClearingInterrupted, recoverLegacy, discardLegacy, legacy: null, lastSave: null, interrupted: null, saving: Promise.resolve(true), gen: 0, KEYS, unsavedKeys: () => [...unsaved], backend: () => (useIDB() ? 'IndexedDB' : 'localStorage') };
-  MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, cvrNote, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, channelRefs, renameChannel };
+  MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, cvrNote, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, asOfFor, channelRefs, renameChannel };
 })();

@@ -32,9 +32,9 @@
 
   // 오늘 확인할 성과 (분리 3단계): 이번 달 목표 판정(목표 화면의 MD.ratioStatus·MD.goalKpis)과 순위 화면의 급락 기준을 그대로 쓴다.
   //  - 기준 미달 / 판정 보류 / 집행 없음·목표 미설정을 나눠 보여 준다. 할 일 목록이 아니라 화면을 열어도 해결로 치지 않는다 — 자료·목표가 바뀌면 다시 판정
-  //  - 화면 위의 기간·채널 선택과 무관하게 자료 기준일이 속한 달 기준 (목표 화면과 같은 달)
+  //  - 화면 위의 기간·채널 선택과 무관하게 광고 리포트 마지막 날이 속한 달 기준(없으면 유입·판매 자료) — 판매 자료 없이도 판정 (개선 2단계)
   function todayChecks(d) {
-    const m = (d.maxDate || U.today()).slice(0, 7);
+    const m = (C.asOfFor('ads').last || C.asOfFor('traffic').last || d.maxDate || U.today()).slice(0, 7);
     const bad = [], hold = [], none = [], noTarget = [];
     const goal = '<a href="#goals" data-adfocus="ad">광고 목표</a>';
     const rs = MD.ratioStatus(m);
@@ -49,7 +49,7 @@
     for (const c of d.channels) {
       const r = MD.ratioStatus(m, c.name);
       // 광고 리포트가 한 번도 없는 채널은 광고를 하지 않는 채널로 보고 뺀다. 그래도 ROAS 목표가 있으면 알린다
-      if (r.roas.state === '광고 리포트 없음') { if (r.roas.target != null) none.push(`${U.esc(c.name)}: ROAS 목표가 있지만 광고 리포트 없음`); continue; }
+      if (r.roas.state === '광고 리포트 없음') continue; // 그달 광고 리포트도 ROAS 목표도 없는 채널 — 광고 대상 아님
       roasLine(c.name, r.roas);
     }
     if (noTarget.length) none.push(`ROAS 목표 미설정: ${noTarget.map(U.esc).join(', ')} — ${goal}에서 입력`);
@@ -68,7 +68,7 @@
     const t = todayChecks(d);
     const sec = (title, tone, list) => (list.length ? `<div style="margin-top:8px"><b>${title}</b> <span class="muted">${list.length}건</span><ul class="insights" style="margin-top:6px">${list.map((x) => `<li class="${tone}">${x}</li>`).join('')}</ul></div>` : '');
     return `<div class="card" id="adToday"><div class="card-head"><h2>오늘 확인할 성과</h2>
-        <span class="muted">${Number(t.m.slice(5))}월 목표 기준${t.upto ? ` · 기준일 ${t.upto}` : ''} · 화면을 열어도 해결로 처리하지 않습니다. 자료·목표가 바뀌면 다시 판정합니다</span></div>
+        <span class="muted"><b>${Number(t.m.slice(5))}월 목표 점검</b> · 위의 기간·채널 선택과 별도${t.upto ? ` · ROAS 기준일 ${t.upto}(광고 리포트)` : ''} · 화면을 열어도 해결로 처리하지 않습니다. 자료·목표가 바뀌면 다시 판정합니다</span></div>
       ${!t.bad.length && !t.hold.length ? '<div class="muted">기준 미달·판정 보류 항목이 없습니다.</div>' : ''}
       ${sec('기준 미달', 'bad', t.bad)}${sec('판정 보류 — 자료가 다 확인되기 전이라 미달·이상을 말할 수 없음', 'warn', t.hold)}${sec('집행 없음·목표 미설정', '', t.none)}</div>`;
   }

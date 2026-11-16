@@ -344,7 +344,7 @@
 
   // ---------- 광고 보고서 (분리 4단계) ----------
   //  - 광고 리포트·유입 자료만으로 만든다(판매 자료가 없어도 열림). 판매 자료가 있으면 광고 매출 비중·행사 성과를 덧붙인다
-  //  - 월 광고 목표 판정은 목표 화면과 같은 MD.ratioStatus·MD.goalKpis. 이 판정의 기준일은 판매 자료 기준일이라 판매 자료가 없으면 '시작 전'
+  //  - 월 광고 목표 판정은 목표 화면과 같은 MD.ratioStatus·MD.goalKpis. 기준일은 지표별(ROAS = 광고 리포트, 전환율 = 유입 자료) — 판매 자료 없이도 판정
   //  - 이름: 광고 ROAS = 광고 리포트의 광고 매출 ÷ 광고비, 행사 ROAS = 행사 매출 ÷ 행사 비용(프로모션 화면) — 서로 다른 지표
   function adReport(el) {
     const st = MD.state, d = MD.data, T = 'ad';
@@ -361,8 +361,8 @@
     // 광고 리포트 마감: 이 기간 광고 자료가 있는 채널 중 확인일이 종료일 전인 곳
     const adChs = [...new Set(cur.ads.map((r) => r.channel))];
     const adOpen = adChs.filter((c) => (C.closeOf(c, 'ads') || '') < st.end);
-    // 월 목표: 보고 기간 마지막 날(판매 자료가 그보다 짧으면 판매 자료 기준일)이 속한 달
-    const gAt = d.maxDate && d.maxDate < st.end ? d.maxDate : st.end, gm = gAt.slice(0, 7), gLabel = `${Number(gm.slice(5))}월`;
+    // 월 목표: 보고 기간 마지막 날(광고 리포트가 그보다 짧으면 광고 리포트 마지막 날)이 속한 달. 판정은 보고 종료일까지
+    const aLast = C.asOfFor('ads').last, gm = (aLast && aLast < st.end ? aLast : st.end).slice(0, 7), gAt = st.end, gLabel = `${Number(gm.slice(5))}월`;
     const gr = MD.ratioStatus(gm, null, gAt), gk = MD.goalKpis(gm, gAt);
     const ratioLine = (r, k) => `${MD.ratioText(r, k)} (${r.state}${r.why ? `: ${r.why}` : ''})`;
     const ch = MD.channelRows(cur, prev).filter((r) => r.adRows || r.visits || r.prevRoas != null).map((r) => {
@@ -438,7 +438,7 @@
 
         <h2>2. ${gLabel} 광고 목표</h2>
         ${goalRows ? `<table class="goal-sum"><tbody>${goalRows}</tbody></table>` : `<p class="muted">${gLabel} 광고 목표(광고비 예산·ROAS·전환율)가 설정되지 않았습니다. [목표·KPI 달성] 광고 목표 탭에서 입력하세요.</p>`}
-        <div class="meta">판정 기준일 ${gr.upto || '-'}${!d.sales.length ? ' — 판매 자료가 없어 목표 판정 기준일을 정하지 못했습니다(판정은 판매 자료 기준일까지)' : ''}${adOpen.length ? ` · <b>광고 리포트 마감 미확인 ${adOpen.length}개 채널</b>` : ''}</div>
+        <div class="meta">ROAS 기준일 ${gr.upto || '-'}(광고 리포트) · 전환율 기준일 ${gr.cvrUpto || '-'}(유입 자료)${gk.budget != null ? ` · 예산 사용 ${gk.budgetUpto || '-'}까지(${gk.spentSrc})` : ''}${adOpen.length ? ` · <b>광고 리포트 마감 미확인 ${adOpen.length}개 채널</b>` : ''}</div>
 
         <h2>3. 채널별 광고</h2>
         ${ch.length ? `<table><thead><tr><th>채널</th><th class="num">광고비</th><th class="num">광고 매출</th><th class="num">광고 ROAS</th><th class="num">${lab}</th><th>${gLabel} 목표 판정</th><th class="num">유입</th><th class="num">전환율</th></tr></thead>
