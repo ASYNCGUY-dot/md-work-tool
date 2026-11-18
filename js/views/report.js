@@ -387,7 +387,8 @@
     // 다음 액션 초안: 숫자로 확인되는 것만
     const actions = [];
     const miss = ch.filter((r) => r.judged && r.judged.state === '목표 미달');
-    miss.slice(0, 3).forEach((r) => actions.push(`${r.channel} 광고 ROAS ${MD.ratioText(r.judged, 'roas')} — 키워드·소재 조정 또는 예산 재배분`));
+    // 목표 판정은 그달 누적 기준이라 위 표의 기간 ROAS와 숫자가 다를 수 있다 — 어느 달 기준인지 붙인다
+    miss.slice(0, 3).forEach((r) => actions.push(`${r.channel} ${gLabel} 누적 광고 ROAS ${MD.ratioText(r.judged, 'roas')} — 키워드·소재 조정 또는 예산 재배분`));
     if (!miss.length) ch.filter((r) => r.adSpend > 0 && r.roas != null && r.roas < MD.settings.roasMin && !(r.judged && r.judged.target != null)).slice(0, 2)
       .forEach((r) => actions.push(`${r.channel} 광고 ROAS ${U.pct(r.roas, 0)} — 기준 ${U.pct(MD.settings.roasMin, 0)} 미달, 키워드·소재 점검`));
     if (gk.usage != null && gk.usage > gk.elapsedShare + 0.05) actions.push(`광고비 예산 사용 ${U.pct(gk.usage, 0)} (월 경과율 ${U.pct(gk.elapsedShare, 0)}) — 남은 기간 일 예산 조정`);

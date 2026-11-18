@@ -120,25 +120,30 @@
       if (!ch) { el.querySelector('#tBulk').innerHTML = '<div class="empty">채널이 없습니다.</div>'; return; }
       const num = (k) => (st[k] === '' || st[k] == null ? 0 : Number(st[k]) || 0);
       const tgt = num('target') / 100, disc = num('discount') / 100, local = num('local');
+      const noTgt = st.target === '' || st.target == null; // 빈칸은 0%가 아니라 미입력 — 목표 비교(색·판정·권장가)를 보류. 직접 넣은 0%는 그대로 판정
+      const badDisc = !MD.discOk(disc); // 할인율 0~99% 밖이면 이익률 자체가 의미 없음 — 계산·판정 보류(권장가와 같은 기준)
+      // 원가 0·빈칸은 미입력으로 본다(대시보드 상품 이익률과 같은 기준) — 이익률·판정을 내지 않고 '원가 입력 필요'로 따로 센다
       const rows = d.products.map((p) => {
+        if (!(p.cost > 0)) return { sku: p.sku, name: p.name, cost: p.cost, price: p.price, margin: null, profit: null, rec: null, change: null, ok: null, noCost: true };
+        if (badDisc) return { sku: p.sku, name: p.name, cost: p.cost, price: p.price, margin: null, profit: null, rec: null, change: null, ok: null };
         const now = MD.profitAt(p.price, p.cost, ch.fee, disc, local);
-        const rec = st.target === '' ? null : MD.priceFor(p.cost, ch.fee, tgt, disc, local, Number(st.round) || 1000);
-        return { sku: p.sku, name: p.name, cost: p.cost, price: p.price, margin: now.margin, profit: now.profit, rec, change: rec ? rec / p.price - 1 : null, ok: now.margin >= tgt };
+        const rec = noTgt ? null : MD.priceFor(p.cost, ch.fee, tgt, disc, local, Number(st.round) || 1000);
+        return { sku: p.sku, name: p.name, cost: p.cost, price: p.price, margin: now.margin, profit: now.profit, rec, change: rec && p.price > 0 ? rec / p.price - 1 : null, ok: noTgt || now.margin == null ? null : now.margin >= tgt, noPrice: !(p.price > 0) }; // 판매가 0·빈칸은 이익률 계산 불가 — 판정 보류(권장가는 원가로 계산 가능하니 유지)
       });
-      const under = rows.filter((r) => !r.ok).length;
+      const noCost = rows.filter((r) => r.noCost).length, noPrice = rows.filter((r) => r.noPrice).length, judged = rows.filter((r) => r.ok != null).length, under = rows.filter((r) => r.ok === false).length;
       MD.table(el.querySelector('#tBulk'), {
         cols: [
           { key: 'sku', label: 'SKU' }, { key: 'name', label: '상품명' },
-          { key: 'cost', label: '입고원가', num: true, fmt: (v) => U.won(v) },
+          { key: 'cost', label: '입고원가', num: true, html: true, fmt: (v, r) => (r.noCost ? '<span class="tag warn">원가 입력 필요</span>' : U.won(v)), xfmt: (v) => v },
           { key: 'price', label: '현재 판매가', num: true, fmt: (v) => U.won(v) },
-          { key: 'margin', label: '현재 이익률', num: true, html: true, fmt: (v, r) => `<span class="delta ${r.ok ? 'good' : 'bad'}">${U.pct(v)}</span>`, xfmt: (v) => v },
-          { key: 'profit', label: '개당 이익', num: true, fmt: (v) => U.won(v), xfmt: (v) => Math.round(v) },
-          { key: 'rec', label: '목표 이익률 판매가', num: true, fmt: (v) => (v ? U.won(v) : MD.discOk(disc) ? '불가' : '할인율 확인'), xfmt: (v) => v },
+          { key: 'margin', label: '현재 이익률', num: true, html: true, fmt: (v, r) => (r.noCost ? '-' : r.noPrice ? '<span class="tag warn">판매가 입력 필요</span>' : r.ok == null ? U.pct(v) : `<span class="delta ${r.ok ? 'good' : 'bad'}">${U.pct(v)}</span>`), xfmt: (v) => v },
+          { key: 'profit', label: '개당 이익', num: true, fmt: (v) => U.won(v), xfmt: (v) => (v == null ? null : Math.round(v)) },
+          { key: 'rec', label: '목표 이익률 판매가', num: true, fmt: (v, r) => (v ? U.won(v) : r.noCost ? '-' : noTgt ? '목표 입력 필요' : MD.discOk(disc) ? '불가' : '할인율 확인'), xfmt: (v) => v },
           { key: 'change', label: '조정 폭', num: true, fmt: (v) => (v == null ? '-' : (v >= 0 ? '+' : '') + U.pct(v)), xfmt: (v) => v },
         ],
         rows, sortKey: 'margin', sortDir: 1, exportName: `판매가점검_${ch.name}`,
       });
-      el.querySelector('#tBulk').insertAdjacentHTML('afterbegin', `<div class="note" style="margin:0 0 6px">목표 이익률(${st.target}%) 미달 상품 <b>${under}개</b> / 전체 ${rows.length}개</div>`);
+      el.querySelector('#tBulk').insertAdjacentHTML('afterbegin', `<div class="note" style="margin:0 0 6px">${badDisc ? '<b>할인율 확인(0~99%)</b> — 범위를 벗어나 현재 이익률·목표 판정을 보류했습니다' : noTgt ? '목표 이익률을 입력하면 미달 상품을 판정합니다(지금은 현재 이익률만 표시)' : `목표 이익률(${st.target}%) 미달 상품 <b>${under}개</b> / 판정 ${judged}개`}${noPrice && !badDisc ? ` · 판매가 미입력 <b>${noPrice}개</b>는 판정 제외` : ''}${noCost ? ` · 원가 미입력 <b>${noCost}개</b>는 ${noTgt ? '이익률 계산' : '판정'} 제외(원가 입력 후 확인)` : ''} · 전체 ${rows.length}개</div>`);
     }
 
     el.querySelectorAll('input, select').forEach((i) => { if (i.id !== 'bulkCh') i.oninput = calc; });
