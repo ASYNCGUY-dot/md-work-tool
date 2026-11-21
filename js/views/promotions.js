@@ -35,12 +35,14 @@
     const baseStart = chFirst > bs ? chFirst : bs;
     const baseDays = baseStart <= be ? U.diffDays(baseStart, be) + 1 : 0;
     const dailyA = a.sales / obs, dailyB = baseDays ? b.sales / BASE_DAYS : null;
-    const cost = Number(p.budget) || 0;
+    // 행사 비용이 음수·숫자 아님이면 이익에 더해져 성과가 부풀려진다 — 계산·판정 보류 (Codex 다음 개선 4단계 R1-01)
+    const rawCost = p.budget == null || p.budget === '' ? 0 : Number(p.budget);
+    const badCost = !Number.isFinite(rawCost) || rawCost < 0, cost = badCost ? null : rawCost;
     const incSales = baseDays ? (dailyA - dailyB) * obs : null;
     const incGross = baseDays ? a.gross - (b.gross / BASE_DAYS) * obs : null;
-    const netGain = baseDays ? incGross - cost / 1.1 : null;
+    const netGain = baseDays && !badCost ? incGross - cost / 1.1 : null;
     // 행사·기준 기간 모두 판매가 없으면 판정하지 않는다. 순증 이익 0은 '본전 근처'
-    const status = p.end > maxD ? '진행/예정' : !during.length && !base.length ? '자료 없음' : !baseDays ? '기준 자료 없음' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
+    const status = p.end > maxD ? '진행/예정' : !during.length && !base.length ? '자료 없음' : !baseDays ? '기준 자료 없음' : badCost ? '비용 확인' : netGain > 0 ? '성공' : netGain >= -cost * 0.2 ? '본전 근처' : '손실';
     // 카테고리를 지정한 행사는 대상 카테고리 주문 ÷ 채널 유입(판매 파일 주문 기준), 아니면 공통 전환율
     const cat = p.categories && p.categories.length;
     return {
@@ -167,7 +169,9 @@
         const f = slot.querySelector('#pForm');
         const v = (n) => f.querySelector(`[name=${n}]`).value;
         if (!v('name') || !v('start') || !v('end')) { U.toast('행사명과 기간을 입력하세요.', 'bad'); return; }
-        const rec = { id: editing.id || 'PR' + Date.now().toString(36), name: v('name'), channel: v('channel'), type: v('type'), start: v('start') <= v('end') ? v('start') : v('end'), end: v('start') <= v('end') ? v('end') : v('start'), discount: Number(v('discount')) / 100, budget: Number(v('budget')) || 0, categories: [...f.querySelectorAll('[name=cat]:checked')].map((x) => x.value), memo: v('memo') };
+        const budget = v('budget') === '' ? 0 : Number(v('budget'));
+        if (!Number.isFinite(budget) || budget < 0) { U.toast('행사 비용은 0 이상 숫자로 입력하세요.', 'bad'); return; }
+        const rec = { id: editing.id || 'PR' + Date.now().toString(36), name: v('name'), channel: v('channel'), type: v('type'), start: v('start') <= v('end') ? v('start') : v('end'), end: v('start') <= v('end') ? v('end') : v('start'), discount: Number(v('discount')) / 100, budget, categories: [...f.querySelectorAll('[name=cat]:checked')].map((x) => x.value), memo: v('memo') };
         if (editing.sample) { rec.sample = true; rec.sampleEdited = true; } // 고친 예시 행사 (개선 1단계)
         const i = d.promotions.findIndex((p) => p.id === rec.id), prev = i >= 0 ? d.promotions[i] : null;
         i >= 0 ? (d.promotions[i] = rec) : d.promotions.push(rec);
@@ -197,6 +201,12 @@
       // 할인율은 0 이상 100% 미만만 계산 — 100%면 아래 이익률 나눗셈이 깨져 원가 손실이 빠진다 (Codex 개선 0단계 R1-01)
       if (!(Number.isFinite(disc) && disc >= 0 && disc < 1)) {
         el.querySelector('#sOut').innerHTML = '<div style="grid-column:1/-1;color:var(--bad)">할인율은 0 이상 100% 미만으로 입력하세요(무료 증정은 비용 칸에 원가를 넣어 계산).</div>';
+        return;
+      }
+      // 음수 비용은 손실을 상쇄해 본전처럼 보이게 한다 — 행사 등록과 같은 기준 (Codex 다음 개선 4단계 R2-01)
+      const rawC = el.querySelector('#sC').value;
+      if (rawC !== '' && !(Number.isFinite(Number(rawC)) && Number(rawC) >= 0)) {
+        el.querySelector('#sOut').innerHTML = '<div style="grid-column:1/-1;color:var(--bad)">행사 비용은 0 이상 숫자로 입력하세요.</div>';
         return;
       }
       const unitM = (m - disc) / (1 - disc); // 할인 후 매출 대비 이익률

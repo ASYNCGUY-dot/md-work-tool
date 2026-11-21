@@ -95,7 +95,7 @@
     const { cur, prev, cs, ce } = MD.current();
     const s = cur.sum, p = prev.sum, lab = MD.cmpLabel();
     const meta = U.store.get('reportMeta', { team: '온라인사업팀', author: '' });
-    const ins = MD.insights(cur, prev);
+    const ins = MD.mdInsights(cur, prev); // 광고 효율 경고는 광고 보고서에서 (다음 개선 4단계)
     // 판매가 없어도 광고 리포트가 있는 채널은 남긴다 (광고비만 나가고 매출이 없는 채널을 놓치지 않게)
     const ch = MD.channelRows(cur, prev).filter((r) => r.sales || r.prevSales || r.adRows).sort((a, b) => b.sales - a.sales);
     const pr = MD.productRows(cur, prev);
@@ -137,7 +137,7 @@
     const draft = readActions('md', st, actions.map((a) => '· ' + a).join('\n'));
 
     const dd = (v, inv) => U.deltaHtml(v, inv);
-    const basis = C.basisLines(cur);
+    const basis = C.basisLines(cur).filter((x) => x.item !== '광고 ROAS'); // 광고 ROAS 정의는 광고 보고서에
 
     el.innerHTML = `
       ${headHtml(T, meta, d)}
@@ -159,11 +159,12 @@
           <tbody>
             <tr><td>매출 (VAT 포함)</td><td class="num">${U.won(s.sales)}</td><td class="num">${U.won(p.sales)}</td><td class="num">${dd(U.delta(s.sales, p.sales))}</td></tr>
             <tr><td>매출총이익 / 이익률</td><td class="num">${U.won(s.gross)} / ${U.pct(s.margin)}</td><td class="num">${U.won(p.gross)} / ${U.pct(p.margin)}</td><td class="num">${ppd(s.margin, p.margin)}</td></tr>
-            <tr><td>광고비(리포트) / 광고 ROAS</td><td class="num">${U.won(s.adSpend)} / ${s.roas == null ? '-' : U.pct(s.roas, 0)}</td><td class="num">${U.won(p.adSpend)} / ${p.roas == null ? '-' : U.pct(p.roas, 0)}</td><td class="num">${dd(U.delta(s.adSpend, p.adSpend), true)}</td></tr>
-            <tr><td>유입 / 전환율</td><td class="num">${U.num(s.visits)} / ${U.pct(s.cvr, 2)}</td><td class="num">${U.num(p.visits)} / ${U.pct(p.cvr, 2)}</td><td class="num">${ppd(s.cvr, p.cvr)}</td></tr>
-            <tr><td>주문 / 객단가</td><td class="num">${U.num(s.orders)} / ${U.won(s.aov)}</td><td class="num">${U.num(p.orders)} / ${U.won(p.aov)}</td><td class="num">${dd(U.delta(s.aov, p.aov))}</td></tr>
+            <tr><td>공헌이익 (광고비 ${U.esc(MD.contribAdSrc())} 기준 차감)</td><td class="num">${U.won(s.contrib)}</td><td class="num">${U.won(p.contrib)}</td><td class="num">${dd(U.delta(s.contrib, p.contrib))}</td></tr>
+            <tr><td>└ 뺀 광고비</td><td class="num">${U.won(s.contribAd)}</td><td class="num">${U.won(p.contribAd)}</td><td class="num">${dd(U.delta(s.contribAd, p.contribAd), true)}</td></tr>
+            <tr><td>주문 / 객단가${s.ordEst || p.ordEst ? ' (추정)' : ''}</td><td class="num">${U.num(s.orders)} / ${U.won(s.aov)}</td><td class="num">${U.num(p.orders)} / ${U.won(p.aov)}</td><td class="num">${dd(U.delta(s.aov, p.aov))}</td></tr>
           </tbody>
         </table>
+        ${s.ordEst || p.ordEst ? `<div class="meta">${MD.ordEstNote(s, p)}</div>` : ''}
         <div style="height:200px;margin-top:12px"><canvas id="rTrend"></canvas></div>
         ${MD.legend([{ label: '이번 기간 일매출', color: MD.colorOf(0) }, { label: lab, color: '#9a9890', dashed: true }])}
 
@@ -181,8 +182,8 @@
         <div class="meta">실적 기준일 ${gs.upto || gr.upto || '-'}${gs.confirmed ? ' (판매 자료 마감 확인)' : ` <b>(판매 자료 마감 미확인 ${gs.unconfirmed.length}개 채널 — 자료 마지막 날 기준)</b>`}${gs.target == null ? '' : ` · 월 목표를 일수로 균등 배분${gs.unset ? ` · 목표 미설정 채널 ${gs.unset}개는 제외` : ''}`}${gEdited ? ` · 목표 마지막 수정 ${gEdited.slice(0, 10)}` : ''}${gk.memo ? ` · 목표 근거: ${U.esc(gk.memo)}` : ''}</div>`}
 
         <h2>3. 채널별 실적</h2>
-        <table><thead><tr><th>채널</th><th class="num">매출</th><th class="num">증감</th><th class="num">비중</th><th class="num">기간 목표 대비</th><th class="num">이익률</th><th class="num" title="광고 리포트의 광고 매출 ÷ 광고비">광고 ROAS</th></tr></thead>
-        <tbody>${ch.map((r) => `<tr><td>${U.esc(r.channel)}</td><td class="num">${U.krw(r.sales)}</td><td class="num">${dd(r.dSales)}</td><td class="num">${U.pct(r.share)}</td><td class="num">${U.pct(r.achieve)}</td><td class="num">${U.pct(r.margin)}</td><td class="num">${r.roas == null ? '-' : U.pct(r.roas, 0)}</td></tr>`).join('')}</tbody></table>
+        <table><thead><tr><th>채널</th><th class="num">매출</th><th class="num">증감</th><th class="num">비중</th><th class="num">기간 목표 대비</th><th class="num">이익률</th><th class="num" title="매출총이익 − 광고비÷1.1 (광고비 출처는 계산 기준)">공헌이익</th></tr></thead>
+        <tbody>${ch.map((r) => `<tr><td>${U.esc(r.channel)}</td><td class="num">${U.krw(r.sales)}</td><td class="num">${dd(r.dSales)}</td><td class="num">${U.pct(r.share)}</td><td class="num">${U.pct(r.achieve)}</td><td class="num">${U.pct(r.margin)}</td><td class="num">${U.krw(r.contrib)}</td></tr>`).join('')}</tbody></table>
 
         <h2>4. 상품</h2>
         <table><thead><tr><th>매출 상위</th><th class="num">매출</th><th class="num">증감</th><th class="num">이익률</th></tr></thead>
@@ -259,11 +260,12 @@
         요약: [
           { 항목: '기간', 값: `${st.start} ~ ${st.end}` }, { 항목: '비교', 값: `${lab} ${cs} ~ ${ce}` },
           { 항목: '매출', 값: Math.round(s.sales) }, { 항목: `${lab} 매출`, 값: Math.round(p.sales) },
-          { 항목: '매출총이익', 값: Math.round(s.gross) }, { 항목: '이익률', 값: s.margin }, { 항목: '광고비(광고 리포트)', 값: Math.round(s.adSpend) },
-          { 항목: '광고 ROAS', 값: s.roas }, { 항목: '전환율', 값: s.cvr }, { 항목: '목표', 값: Math.round(target) },
+          { 항목: '매출총이익', 값: Math.round(s.gross) }, { 항목: '이익률', 값: s.margin },
+          { 항목: '공헌이익', 값: Math.round(s.contrib) }, { 항목: `공헌이익에서 뺀 광고비(${MD.contribAdSrc()})`, 값: Math.round(s.contribAd) },
+          { 항목: '주문 수', 값: s.orders }, { 항목: s.ordEst ? '객단가(추정)' : '객단가', 값: s.aov == null ? null : Math.round(s.aov) }, { 항목: '목표', 값: Math.round(target) },
           ...ins.map((i, k) => ({ 항목: '인사이트 ' + (k + 1), 값: i.plain })),
         ],
-        채널별: ch.map((r) => ({ 채널: r.channel, 매출: Math.round(r.sales), [`${lab} 매출`]: Math.round(r.prevSales), 증감률: r.dSales, 비중: r.share, 목표: Math.round(r.target), 달성률: r.achieve, 매출총이익: Math.round(r.gross), 이익률: r.margin, '광고비(리포트)': Math.round(r.adSpend), '광고 ROAS': r.roas, 유입: r.visits, 전환율: r.cvr })),
+        채널별: ch.map((r) => ({ 채널: r.channel, 매출: Math.round(r.sales), [`${lab} 매출`]: Math.round(r.prevSales), 증감률: r.dSales, 비중: r.share, 목표: Math.round(r.target), 달성률: r.achieve, 매출총이익: Math.round(r.gross), 이익률: r.margin, 공헌이익: Math.round(r.contrib), [`뺀 광고비(${MD.contribAdSrc()})`]: Math.round(r.contribAd) })),
         상품별: pr.filter((r) => r.sales || r.prevSales).sort((a, b) => b.sales - a.sales).map((r) => ({ SKU: r.sku, 상품명: r.name, 카테고리: r.category, 매출: Math.round(r.sales), [`${lab} 매출`]: Math.round(r.prevSales), 증감률: r.dSales, 수량: r.qty, 이익률: r.margin })),
         목표: gs.target == null ? [{ 항목: '기준 월', 값: gm }, { 항목: '실적 기준일', 값: gr.upto }, { 항목: `${gLabel} 매출 목표`, 값: '미설정' }, ...ratioXlsx] : [
           { 항목: '기준 월', 값: gm }, { 항목: '실적 기준일', 값: gs.upto }, { 항목: '월 목표', 값: Math.round(gs.target) }, { 항목: '누적 실적', 값: Math.round(gs.actual) },

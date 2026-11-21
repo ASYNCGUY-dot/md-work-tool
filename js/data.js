@@ -743,10 +743,11 @@
   // z.ad는 유입 파일의 광고비, 광고 리포트 광고비는 z.adSpend. 공헌이익은 계산 기준(adSource)에서 고른 쪽을 뺀다.
   function summarize(sales, traffic, ads) {
     const d = MD.data;
-    const z = { sales: 0, qty: 0, orders: 0, discount: 0, fee: 0, cogs: 0, ad: 0, visits: 0 };
+    const z = { sales: 0, qty: 0, orders: 0, ordEst: 0, discount: 0, fee: 0, cogs: 0, ad: 0, visits: 0 };
     for (const r of sales) {
       const ch = d.channelMap[r.channel], p = d.productMap[r.sku];
       z.sales += r.sales; z.qty += r.qty; z.orders += r.orders || r.qty; z.discount += r.discount || 0;
+      if (r.ordSrc === 'qty' || !r.orders) z.ordEst++; // 주문 수를 수량으로 채운 행 — 주문 수·객단가는 추정
       z.fee += (r.sales * (ch ? ch.fee : 0)) / 1.1;
       z.cogs += r.qty * (p ? p.cost : 0);
     }

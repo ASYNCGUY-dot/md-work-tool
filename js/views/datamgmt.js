@@ -316,7 +316,7 @@
       if (!okDate(r.date)) return '날짜'; if (!okText(r.channel)) return '채널'; if (!okText(r.sku)) return 'SKU'; if (!okNum(r.sales)) return '매출';
       const n = optNum(r, ['qty', 'orders', 'discount']); if (n) return n;
       const z = ['qty', 'orders'].find((f) => r[f] != null && r[f] !== '' && !(r[f] > 0)); if (z) return `${z === 'qty' ? '수량' : '주문수'}(0 초과)`;
-      if (r.orders == null && r.ordSrc == null) r.ordSrc = 'qty'; // 주문 수를 수량으로 채운 표시(가져오기와 같음)
+      if (r.orders == null || r.orders === '') r.ordSrc = 'qty'; // 주문 수를 수량으로 채운 표시(가져오기와 같음, 빈 문자열도 같은 기준 — Codex 다음 개선 4단계 R1-03)
       fill(r, { qty: 1, orders: (x) => x.qty, discount: 0 });
       return null;
     },
@@ -352,6 +352,7 @@
       if (r.categories != null && !Array.isArray(r.categories)) return '카테고리';
       const n = optNum(r, ['discount', 'budget']); if (n) return n;
       fill(r, { discount: 0, budget: 0 });
+      if (r.budget < 0) return '행사 비용(0 이상)'; // 음수 비용은 순증 이익을 부풀린다 (Codex 다음 개선 4단계 R1-01)
       return null;
     },
     pos: (r) => (!okText(r.sku) ? 'SKU' : !okNum(r.qty) ? '수량' : !okDateOrEmpty(r.ordered) ? '발주일' : !okDateOrEmpty(r.eta) ? '입고 예정일' : optNum(r, ['received']) || (fill(r, { received: 0 }), null)),

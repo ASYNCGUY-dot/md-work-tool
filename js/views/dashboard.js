@@ -51,6 +51,7 @@
     });
   };
 
+  // 인사이트: kind는 표시 강도(good/warn/bad), area는 업무 분류(md/ad) — MD 보고서·대시보드 요약은 md만 (다음 개선 4단계)
   MD.insights = function (cur, prev) {
     const out = [];
     const s = cur.sum, p = prev.sum, lab = MD.cmpLabel();
@@ -74,7 +75,7 @@
     }
 
     const lowRoas = ch.filter((r) => r.adSpend > 0 && r.roas != null && r.roas < MD.settings.roasMin).sort((a, b) => a.roas - b.roas);
-    if (lowRoas.length) out.push({ kind: 'warn', text: `광고 ROAS 기준(${U.pct(MD.settings.roasMin, 0)}) 미달: ${lowRoas.slice(0, 3).map((r) => `<b>${U.esc(r.channel)}</b> ${U.pct(r.roas, 0)}`).join(', ')}`, plain: `광고 ROAS 기준 미달: ${lowRoas.slice(0, 3).map((r) => `${r.channel} ${U.pct(r.roas, 0)}`).join(', ')}` });
+    if (lowRoas.length) out.push({ area: 'ad', kind: 'warn', text: `광고 ROAS 기준(${U.pct(MD.settings.roasMin, 0)}) 미달: ${lowRoas.slice(0, 3).map((r) => `<b>${U.esc(r.channel)}</b> ${U.pct(r.roas, 0)}`).join(', ')}`, plain: `광고 ROAS 기준 미달: ${lowRoas.slice(0, 3).map((r) => `${r.channel} ${U.pct(r.roas, 0)}`).join(', ')}` });
 
     const pr = MD.productRows(cur, prev).filter((r) => r.prevSales > 0 || r.sales > 0);
     const hot = pr.filter((r) => r.sales > s.sales * 0.01).sort((a, b) => b.diff - a.diff)[0];
@@ -85,7 +86,15 @@
 
     const cover = MD.coverRows().filter((r) => r.cover != null && r.cover < MD.settings.coverDays && r.daily > 0).sort((a, b) => a.cover - b.cover);
     if (cover.length) out.push({ kind: 'warn', text: `재고 ${MD.settings.coverDays}일 내 소진 예상 ${cover.length}개: ${cover.slice(0, 3).map((r) => `<b>${U.esc(r.name)}</b>(${Math.floor(r.cover)}일)`).join(', ')}${cover.length > 3 ? ' 외' : ''}`, plain: `재고 소진 임박 ${cover.length}개 SKU (${cover.slice(0, 3).map((r) => r.name).join(', ')})` });
-    return out;
+    return out.map((x) => ({ area: 'md', ...x }));
+  };
+  MD.mdInsights = (cur, prev) => MD.insights(cur, prev).filter((x) => x.area === 'md');
+  // 공헌이익에서 뺀 광고비의 출처(계산 기준) — 금액과 함께 보여 준다
+  MD.contribAdSrc = () => (C.basis().adSource === 'ads' ? '광고 리포트' : '유입 파일');
+  // 주문 수를 수량으로 채운 행이 있으면 주문 수·객단가는 추정. 비교 기간만 대체여도 증감률이 추정이 된다 (Codex 다음 개선 4단계 R1-02)
+  MD.ordEstNote = (s, p) => {
+    const parts = [s && s.ordEst ? `이번 기간 ${U.num(s.ordEst)}행` : '', p && p.ordEst ? `${MD.cmpLabel()} ${U.num(p.ordEst)}행` : ''].filter(Boolean);
+    return parts.length ? `주문 수 없는 행을 수량으로 대체(${parts.join(', ')}) — 주문 수·객단가${p && p.ordEst ? '·증감' : ''} 추정` : '';
   };
 
   MD.kpiTiles = function (cur, prev) {
@@ -98,10 +107,10 @@
       { k: '기간 목표 대비', v: ach == null ? '-' : U.pct(ach), sub: `선택 기간에 배분된 목표 ${U.krw(target)} · <a href="#goals">월 목표 현황</a>`, bar: ach },
       { k: '매출총이익', exact: s.gross, v: U.krw(s.gross) + '원', sub: `${U.deltaHtml(U.delta(s.gross, p.gross))} 이익률 ${U.pct(s.margin)}` },
       { k: '이익률', v: U.pct(s.margin), sub: `${lab} ${U.pct(p.margin)} <b>${pp(s.margin, p.margin)}</b>` },
-      { k: '광고 ROAS', v: s.roas == null ? '-' : U.pct(s.roas, 0), sub: s.adRows ? `광고 매출 ÷ 광고비 · 광고비 ${U.krw(s.adSpend)} ${U.deltaHtml(U.delta(s.adSpend, p.adSpend), true)} · <a href="#ads">광고 성과</a>` : '광고 리포트 없음 · <a href="#data">올리기</a>' },
-      { k: '전환율', v: U.pct(s.cvr, 2), sub: `유입 ${U.num(s.visits)} · ${lab} ${U.pct(p.cvr, 2)}${MD.calc.cvrNote(s) ? `<br><span class="muted">${MD.calc.cvrNote(s)}</span>` : ''}` },
-      { k: '주문 수', v: U.num(s.orders), sub: U.deltaHtml(U.delta(s.orders, p.orders)) },
-      { k: '객단가', v: U.won(s.aov), sub: U.deltaHtml(U.delta(s.aov, p.aov)) },
+      // 광고 ROAS·전환율은 마케팅·광고 공간에서 다룬다 — MD 대시보드에는 광고비를 뺀 이익만 (다음 개선 4단계)
+      { k: '공헌이익', exact: s.contrib, v: U.krw(s.contrib) + '원', sub: `광고비 차감 후 이익 ${U.deltaHtml(U.delta(s.contrib, p.contrib))}<br><span class="muted">뺀 광고비 ${U.krw(s.contribAd)}원(${MD.contribAdSrc()}) · ROAS·전환율은 <a href="#ads">광고 성과</a></span>` },
+      { k: '주문 수', v: U.num(s.orders) + (s.ordEst ? ' <small class="muted">추정</small>' : ''), sub: `${U.deltaHtml(U.delta(s.orders, p.orders))}${s.ordEst || p.ordEst ? `<br><span class="muted">${MD.ordEstNote(s, p)}</span>` : ''}` },
+      { k: '객단가', v: U.won(s.aov) + (s.ordEst ? ' <small class="muted">추정</small>' : ''), sub: `${U.deltaHtml(U.delta(s.aov, p.aov))}${s.ordEst || p.ordEst ? `<br><span class="muted">매출 ÷ 주문 수(일부 수량 대체${!s.ordEst ? `, ${MD.cmpLabel()}만` : ''})</span>` : ''}` },
     ];
     return `<div class="kpis">${tiles.map((t) => `<div class="kpi"><div class="k">${t.k}</div><div class="v"${t.exact != null ? ` title="${U.won(t.exact)}"` : ''}>${t.v}</div><div class="s">${t.sub}</div>${t.bar != null ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, t.bar * 100)}%"></div></div>` : ''}</div>`).join('')}</div>`;
   };
@@ -121,7 +130,7 @@
         </div>
         <div class="card">
           <div class="card-head"><h2>핵심 요약</h2><a href="#report" class="btn small">보고서로</a></div>
-          <ul class="insights">${MD.insights(cur, prev).map((i) => `<li class="${i.kind}">${i.text}</li>`).join('')}</ul>
+          <ul class="insights">${MD.mdInsights(cur, prev).map((i) => `<li class="${i.kind}">${i.text}</li>`).join('')}</ul>
         </div>
       </div>
       <div class="grid g2">
@@ -160,7 +169,8 @@
         { key: 'channel', label: '채널', html: true, fmt: (v, r) => (!MD.data.channelMap[v] ? U.esc(v) : `<a href="#channels" data-ch="${U.esc(v)}" title="채널 상세로">${U.esc(v)}</a>`), xfmt: (v) => v },
         MD.cols.sales, MD.cols.dSales, MD.cols.share,
         { key: 'achieve', label: '기간 목표 대비율', num: true, fmt: (v) => U.pct(v), xfmt: (v) => v },
-        MD.cols.gross, MD.cols.margin, MD.cols.ad, MD.cols.roas, MD.cols.cvr,
+        MD.cols.gross, MD.cols.margin,
+        { key: 'contrib', label: '공헌이익', num: true, money: true, fmt: (v) => U.krw(v), xfmt: (v) => Math.round(v) },
       ],
       rows, total: tot, sortKey: 'sales', exportName: `채널성과_${st.start}_${st.end}`,
     });
