@@ -65,7 +65,7 @@
     const miss = spec.required.filter((k) => !map[k]);
     if (miss.length) throw new Error(`필수 열 없음: ${miss.map((k) => spec.cols[k][0]).join(', ')}`);
     // 잘못된 값은 0이나 기본값으로 바꾸지 않고 행 단위로 제외한다. 빈 칸만 '값 없음'으로 본다.
-    const reasons = {}, samples = [];
+    const reasons = {}, samples = [], feeRead = [];
     let rowNo = 0;
     const reject = (why) => { reasons[why] = (reasons[why] || 0) + 1; if (samples.length < 20) samples.push({ row: rowNo, why }); return null; };
     const out = rows.map((r, i) => {
@@ -81,12 +81,17 @@
           if (!/\d/.test(cleaned) || !Number.isFinite(v)) return reject(`${spec.cols[k][0]} 숫자 아님`);
           if (spec === SPECS.sales && (k === 'qty' || k === 'orders') && !(v > 0)) return reject(`${spec.cols[k][0]} 0 이하`);
           // 유입 자료의 방문·광고비·주문 건수는 0이 정상 값이다 (주문 없는 날, 광고 안 한 날). 음수만 거부
-          // 상품 원가·판매가·재고도 음수면 원가가 이익에 더해진다 (Codex 분리 2단계 R1-01)
-          if ((spec === SPECS.traffic || spec === SPECS.ads || spec === SPECS.compete || spec === SPECS.products) && v < 0) return reject(`${spec.cols[k][0]} 음수`);
+          if ((spec === SPECS.traffic || spec === SPECS.ads || spec === SPECS.compete) && v < 0) return reject(`${spec.cols[k][0]} 음수`);
           if (spec === SPECS.compete && (k === 'price' || k === 'ourPrice') && !(v > 0)) return reject(`${spec.cols[k][0]} 0원`); // 0원 조사가는 가격 격차를 계산할 수 없다
-          // 수수료: '12%'·'0.5%'처럼 %가 붙었거나 1보다 크면(12) 백분율, 아니면(0.12) 비율로 본다
+          // 수수료: '12%'·'0.5%'처럼 %가 붙었거나 1보다 크면(12) 백분율, 아니면(0.12) 비율로 본다.
+          // %가 없는 1은 100%(비율)인지 1%(백분율)인지 알 수 없어 거부하고 '1%'로 적게 안내 (다음 개선 5단계)
+          if (k === 'fee' && !raw.includes('%') && v === 1) return reject('수수료율 1 — 100%인지 1%인지 불명확(1%면 "1%"로)');
           if (k === 'fee' && (raw.includes('%') || v > 1)) v = v / 100;
-          if (k === 'fee' && !(v >= 0 && v < 1)) return reject('수수료율 범위 밖(0 이상 100% 미만)'); // 음수면 수수료가 이익에 더해진다 (Codex 개선 6단계 R1-01)
+          // 상품 판매가·원가·재고, 채널 수수료율은 백업 복원·직접 수정과 같은 범위표(MD.valueRules)로 — 음수 원가·수수료는 이익에 더해진다 (Codex 분리 2단계 R1-01, 개선 6단계 R1-01)
+          const kindOf = spec === SPECS.products ? 'products' : spec === SPECS.channels ? 'channels' : null;
+          const issue = kindOf && MD.valueRules.issue(kindOf, k, v);
+          if (issue) return reject(issue);
+          if (k === 'fee') feeRead.push({ row: rowNo, name: String(r[map.name] ?? '').trim(), raw, v }); // 미리보기에 해석 결과를 보여 준다
           o[k] = v;
         } else if (k === 'date') {
           const v = U.normDate(raw);
@@ -100,7 +105,7 @@
       return o;
     }).filter(Boolean);
     const bad = Object.values(reasons).reduce((a, b) => a + b, 0);
-    return { rows: out, bad, reasons, map, samples };
+    return { rows: out, bad, reasons, map, samples, feeRead };
   }
 
   // 광고 리포트: 일자·채널·캠페인으로 합산. 광고비는 필수, 광고 매출·노출·클릭·전환수는 선택 —
@@ -296,6 +301,7 @@
         ${st.shrink && st.shrink.n ? `<br><b style="color:var(--warn)">기존보다 ${st.shrink.label}이 줄어드는 ${st.keyLabel} ${U.num(st.shrink.n)}건(합계 −${MONEY.includes(st.shrink.f) ? U.won(st.shrink.amt) : U.num(st.shrink.amt)})</b> — 같은 키의 기존 값은 더하지 않고 이 파일의 합계로 바뀝니다. 그날 주문의 일부만 담은 파일이면 기존 합계가 빠지니, 하루 전체가 들어 있는 파일인지 확인하세요.` : ''}
         ${st.newCh.length ? `<br>새 채널: ${list(st.newCh)}${kind === 'sales' || kind === 'traffic' ? ' — 자동 등록되며 수수료율·목표를 따로 입력해야 합니다.' : kind === 'channels' ? '' : ' — 채널 목록에 없어 채널별 판정에서 빠집니다.'}` : ''}
         ${st.newSku.length ? `<br>새 상품: ${list(st.newSku)}${kind === 'sales' ? ' — 자동 등록되며 원가를 입력해야 이익이 계산됩니다.' : kind === 'compete' ? ' — 상품 마스터에 없어 우리 실적과 연결되지 않습니다.' : ''}` : ''}</div>
+      ${kind === 'channels' && res.feeRead && res.feeRead.length ? `<div class="note" style="margin:6px 0 0">수수료율 해석(%가 붙었거나 1보다 크면 백분율, 아니면 비율): ${res.feeRead.slice(0, 8).map((x) => `${U.esc(x.name || x.row + '행')} '${U.esc(x.raw)}' → <b>${U.pct(x.v, 2)}</b>`).join(', ')}${res.feeRead.length > 8 ? ` 외 ${res.feeRead.length - 8}개` : ''}</div>` : ''}
       ${res.bad ? `<div class="note" style="margin:6px 0 0;color:var(--bad)">제외 사유: ${Object.entries(res.reasons).map(([r, n]) => `${U.esc(r)} ${U.num(n)}`).join(', ')} · 예: ${res.samples.slice(0, 5).map((x) => `${x.row}행 ${U.esc(x.why)}`).join(', ')}${res.bad > 5 ? ' …' : ''}</div>` : ''}`;
   }
   // 백업 복원 전 형식 검사: 자료 종류별로 배열(마감 확인은 객체)인지, 계산에 꼭 필요한 칸이 있는지. 문제 목록을 돌려준다
@@ -341,10 +347,10 @@
     channels: (r) => {
       if (!okText(r.name)) return '채널명'; const n = optNum(r, ['fee', 'target']); if (n) return n;
       fill(r, { fee: 0, target: 0 });
-      return r.fee >= 0 && r.fee < 1 ? null : '수수료율(0 이상 100% 미만)'; // 가져오기·직접 수정과 같은 범위 (Codex 개선 6단계 R2-01)
+      return MD.valueRules.issue('channels', 'fee', r.fee); // 가져오기·직접 수정과 같은 범위표 (Codex 개선 6단계 R2-01, 다음 개선 5단계)
     },
     // 음수 원가는 이익에 더해진다 — 업로드·직접 수정과 같이 0 이상만 (Codex 분리 2단계 R2-01)
-    products: (r) => { if (!okText(r.sku)) return 'SKU'; const n = optNum(r, ['price', 'cost', 'stock']); if (n) return n; fill(r, { price: 0, cost: 0, stock: 0, name: (x) => x.sku }); const neg = [['price', '판매가'], ['cost', '원가'], ['stock', '재고']].find(([f]) => r[f] < 0); return neg ? `${neg[1]}(0 이상)` : null; },
+    products: (r) => { if (!okText(r.sku)) return 'SKU'; const n = optNum(r, ['price', 'cost', 'stock']); if (n) return n; fill(r, { price: 0, cost: 0, stock: 0, name: (x) => x.sku }); return ['price', 'cost', 'stock'].map((f) => MD.valueRules.issue('products', f, r[f])).find(Boolean) || null; },
     targets: (r) => (typeof r.month !== 'string' || !/^\d{4}-\d{2}$/.test(r.month) ? '월' : optNum(r, ['sales', 'roas', 'cvr', 'adBudget', 'margin']) || null),
     promotions: (r) => {
       if (!okText(r.name)) return '행사명'; if (!okText(r.channel)) return '채널'; if (!okDate(r.start)) return '시작일'; if (!okDate(r.end)) return '종료일';
@@ -870,8 +876,9 @@
 
     // 사용자가 고친 행은 userSet으로 표시 — 예시 → 실데이터 전환 때 이 행만 남긴다
     const masterSave = (k) => (kind, row, meta) => {
-      if (k === 'products' && kind === 'edit' && meta && ['price', 'cost', 'stock'].includes(meta.key) && !(Number.isFinite(meta.value) && meta.value >= 0)) { U.toast('판매가·원가·재고는 0 이상으로 입력하세요.', 'bad'); return false; }
-      if (k === 'channels' && kind === 'edit' && meta && meta.key === 'fee' && !(Number.isFinite(meta.value) && meta.value >= 0 && meta.value < 1)) { U.toast('수수료율은 0 이상 100% 미만으로 입력하세요.', 'bad'); return false; }
+      // 업로드·백업 복원과 같은 범위표 (다음 개선 5단계)
+      const issue = kind === 'edit' && meta ? MD.valueRules.issue(k, meta.key, meta.value) : null;
+      if (issue) { U.toast(`${issue} 범위로 입력하세요.`, 'bad'); return false; }
       if (k === 'channels' && kind === 'edit' && meta && meta.key === 'name' && meta.old !== meta.value) {
         const to = String(meta.value).trim(), from = meta.old;
         if (!to) { U.toast('채널명은 비울 수 없습니다.', 'bad'); return false; }
@@ -900,6 +907,24 @@
           row.name = from; // 색인(channelMap)을 만들기 전에 이름부터 되돌린다 — 편집기 복원은 이 뒤라 색인에 새 이름이 남던 문제 (Codex 개선 3단계 R2-01)
           MD.buildIndex();
           return false; // 공통 편집기도 채널명 칸을 이전 값으로 되돌린다(같은 값)
+        });
+      }
+      // SKU는 판매·발주·경쟁 조사·검색 순위·원가 변경 기록의 연결 키다. 마스터만 바꾸면 판매가 원가 0으로 계산돼 이익이 부풀려진다 —
+      // 연결 자료가 있으면 거부, 없을 때만 바꾸고 색인을 다시 만든다 (Codex 다음 개선 5단계 R1-01)
+      if (k === 'products' && kind === 'edit' && meta && meta.key === 'sku' && meta.old !== meta.value) {
+        const to = String(meta.value).trim(), from = meta.old, D = MD.data;
+        if (!to) { U.toast('SKU는 비울 수 없습니다.', 'bad'); return false; }
+        if (to === from) { row.sku = from; return true; }
+        if (D.products.some((p) => p !== row && p.sku === to)) { U.toast(`'${to}' SKU가 이미 있습니다.`, 'bad'); return false; }
+        const n = (list) => (list || []).filter((r) => r.sku === from).length;
+        const refs = [['판매', n(D.sales), '행'], ['발주', n(D.pos), '건'], ['경쟁 조사', n(D.compete), '건'], ['검색 순위', n(D.ranks), '건'], ['원가 변경 기록', (D.changes || []).filter((c) => c.kind === 'cost' && c.key === from).length, '건']].filter((x) => x[1]);
+        if (refs.length) { U.toast(`SKU '${from}'는 ${refs.map((x) => `${x[0]} ${U.num(x[1])}${x[2]}`).join('·')}에 연결돼 있어 바꿀 수 없습니다. 새 SKU로 쓰려면 새 상품으로 추가하세요.`, 'bad'); return false; }
+        const hadU = row.userSet;
+        row.sku = to; row.userSet = true;
+        return MD.store.saveP(['products']).then((ok) => {
+          if (!ok) { row.sku = from; if (!hadU) delete row.userSet; }
+          MD.buildIndex(); // 저장 실패면 이전 SKU로 되돌린 뒤 색인
+          return ok;
         });
       }
       const hadUser = row && row.userSet;

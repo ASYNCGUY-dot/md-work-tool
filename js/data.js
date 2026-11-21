@@ -962,5 +962,20 @@
   // 저장 결과를 항상 Promise<boolean>으로 — 화면 편집은 '저장 → 실패면 되돌림 → 성공 안내는 성공 때만'을 이 결과로 판단한다 (개선 3단계)
   const saveP = (keys) => { try { const r = save(keys); return r && typeof r.then === 'function' ? r.then((ok) => ok !== false, () => false) : Promise.resolve(r !== false); } catch (e) { return Promise.resolve(false); } };
   MD.store = { load, save, saveP, resetToSample, startEmpty, ensureReal, sampleCarry, SAMPLE_KEEP, DATASETS, dsOf, emptyOf, generateSample, acceptInterrupted, saveAllClearingInterrupted, recoverLegacy, discardLegacy, legacy: null, lastSave: null, interrupted: null, saving: Promise.resolve(true), gen: 0, KEYS, unsavedKeys: () => [...unsaved], backend: () => (useIDB() ? 'IndexedDB' : 'localStorage') };
+  // 입력 값 규칙 (다음 개선 5단계): 같은 업무 의미의 값은 업로드·백업 복원·직접 수정에서 같은 허용 범위.
+  // 여기에는 정규화된 값(수수료는 비율)의 범위만 둔다 — 문자열 해석·빈 값 처리·과거 백업 호환·저장 처리는 경로별 그대로
+  const VALUE_RULES = {
+    products: { price: { label: '판매가', min: 0 }, cost: { label: '원가', min: 0 }, stock: { label: '재고', min: 0 } },
+    channels: { fee: { label: '수수료율', min: 0, below: 1, text: '0 이상 100% 미만' } },
+  };
+  // 규칙에 맞으면 null, 아니면 '원가(0 이상)'처럼 항목과 허용 범위
+  function valueIssue(kind, key, v) {
+    const r = (VALUE_RULES[kind] || {})[key];
+    if (!r) return null;
+    const ok = typeof v === 'number' && Number.isFinite(v) && (r.min == null || v >= r.min) && (r.below == null || v < r.below);
+    return ok ? null : `${r.label}(${r.text || `${r.min} 이상`})`;
+  }
+  MD.valueRules = { table: VALUE_RULES, issue: valueIssue };
+
   MD.calc = { basis, setBasis, reloadBasis, basisLines, logChange, cvrNote, inRange, summarize, period, compareRange, by, monthTarget, salesTargetOf, targetInfo, targetRow, setTarget, cleanTargets, closeOf, setClose, salesAsOf, asOfFor, channelRefs, renameChannel };
 })();
